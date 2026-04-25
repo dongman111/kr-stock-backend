@@ -515,9 +515,23 @@ function parseRssItems(xmlText) {
   return items;
 }
 
-async function fetchNews(ticker) {
+async function fetchNews(ticker, stockName = '') {
   try {
     const code = ticker.replace('.KS', '').replace('.KQ', '');
+    // 종목 관련성 필터: 종목명 키워드 (짧은 이름 추출)
+    const nameTokens = stockName
+      ? stockName.replace(/[()\[\]]/g, '').split(/[\s·&,]+/).filter(t => t.length >= 2)
+      : [];
+    // 관련성 체크: 제목에 종목명 토큰 또는 종목코드가 포함되어야 함
+    function isRelevant(title) {
+      if (!title) return false;
+      if (nameTokens.length === 0) return true; // 종목명 없으면 필터 없음
+      const t = title;
+      // 종목코드 직접 포함
+      if (t.includes(code)) return true;
+      // 종목명 토큰 중 하나라도 포함 (2글자 이상)
+      return nameTokens.some(token => t.includes(token));
+    }
 
     // 1차: 네이버 금융 종목 뉴스 RSS
     const naverRssUrl = `https://finance.naver.com/item/news_news.naver?code=${code}&page=1&sm=title_entity_id.basic&clusterId=`;
@@ -600,12 +614,12 @@ async function fetchNews(ticker) {
       } catch { /* ignore */ }
     }
 
-    // 중복 제거
+    // 관련성 필터 + 중복 제거
     const seen = new Set();
     allNews = allNews.filter(n => {
       if (!n.title || seen.has(n.title)) return false;
       seen.add(n.title);
-      return true;
+      return isRelevant(n.title); // 종목 관련 기사만 통과
     });
 
     // 결과가 없으면 Yahoo Finance fallback
@@ -637,41 +651,63 @@ async function fetchNews(ticker) {
 const BULLISH_KEYWORDS = [
   // 실적 호재
   "어닝서프라이즈", "실적 서프라이즈", "어닝 서프라이즈", "실적 상회", "최대 실적", "사상 최대",
-  "영업이익 증가", "매출 증가", "순이익 증가", "흑자전환", "실적 개선", "실적 호조",
-  "목표주가 상향", "투자의견 상향", "매수 추천", "신규 편입",
-  "신고가", "52주 신고가", "상장 이후 최고",
-  "급등", "상한가", "강세", "랠리", "반등",
-  "수주", "계약 체결", "대규모 계약", "수주 잔고",
-  "인수", "합병", "파트너십", "전략적 제휴",
-  "자사주 매입", "배당 증가", "특별배당",
-  "FDA 승인", "임상 성공", "허가 획득",
-  "AI", "반도체", "전기차", "2차전지",
-  "수출 증가", "해외 진출", "신시장 개척",
-  // 영어 키워드
-  "beat", "surge", "rally", "upgrade", "buy", "outperform", "record", "high",
+  "영업이익 증가", "매출 증가", "순이익 증가", "흑자전환", "실적 개선", "실적 호조", "어닝",
+  // 투자의견
+  "목표주가 상향", "투자의견 상향", "매수 추천", "신규 편입", "목표가 상향", "비중확대",
+  "강력매수", "적극매수", "매수", "아웃퍼폼",
+  // 가격 상승
+  "신고가", "52주 신고가", "상장 이후 최고", "역대 최고", "최고가",
+  "급등", "상한가", "강세", "랠리", "반등", "상승", "오름세", "강력 상승",
+  // 사업 호재
+  "수주", "계약 체결", "대규모 계약", "수주 잔고", "수주 성공", "낙찰",
+  "인수", "합병", "파트너십", "전략적 제휴", "협약", "MOU",
+  "자사주 매입", "배당 증가", "특별배당", "자사주",
+  "FDA 승인", "임상 성공", "허가 획득", "승인", "인허가",
+  "수출 증가", "해외 진출", "신시장 개척", "글로벌 확장",
+  "신제품", "출시", "론칭", "개발 성공",
+  // 영어
+  "beat", "surge", "rally", "upgrade", "buy", "outperform", "record high",
   "acquisition", "partnership", "approval", "dividend", "buyback",
 ];
 
 const BEARISH_KEYWORDS = [
+  // 실적 악재
   "실적 쇼크", "어닝 쇼크", "실적 부진", "실적 하회", "영업손실", "적자전환", "순손실",
-  "목표주가 하향", "투자의견 하향", "매도 추천",
-  "급락", "하한가", "약세", "매도세",
-  "소송", "과징금", "제재", "조사", "검찰",
-  "파산", "워크아웃", "구조조정", "감원",
-  "수주 취소", "계약 해지",
-  "리콜", "결함", "안전 문제",
+  "영업이익 감소", "매출 감소", "순이익 감소", "실적 악화", "실적 충격",
+  // 투자의견 하향
+  "목표주가 하향", "투자의견 하향", "매도 추천", "목표가 하향", "비중축소",
+  "매도", "언더퍼폼", "중립 하향",
+  // 가격 하락
+  "급락", "하한가", "약세", "매도세", "하락", "폭락", "추락", "내림세",
+  // 법적/규제 리스크
+  "소송", "과징금", "제재", "조사", "검찰", "수사", "고발", "기소",
+  "공정위", "금감원 제재", "금융당국", "규제",
+  // 사업 악재
+  "파산", "워크아웃", "구조조정", "감원", "정리해고", "희망퇴직",
+  "수주 취소", "계약 해지", "계약 취소",
+  "리콜", "결함", "안전 문제", "사고",
+  // 서비스/사업 종료
+  "종말", "서비스 종료", "사업 철수", "폐지", "폐업", "종료", "중단",
+  "함락", "위기", "붕괴", "몰락", "퇴출",
+  // 영어
   "miss", "plunge", "downgrade", "sell", "underperform", "loss", "decline",
-  "lawsuit", "investigation", "fine", "layoff", "bankruptcy",
+  "lawsuit", "investigation", "fine", "layoff", "bankruptcy", "recall",
 ];
 
-function isArticleBullish(title) {
-  if (!title) return false;
+// 점수: 긍정=10, 부정=0, 중립=5
+function getArticleScore(title) {
+  if (!title) return { score: 5, sentiment: 'neutral' };
   const t = title.toLowerCase();
-  const bullish  = BULLISH_KEYWORDS.some(w => t.includes(w.toLowerCase()));
-  const bearish  = BEARISH_KEYWORDS.some(w => t.includes(w.toLowerCase()));
-  if (bullish && !bearish) return true;
-  if (bearish && !bullish) return false;
-  return bullish;
+  const bullishHits = BULLISH_KEYWORDS.filter(w => t.includes(w.toLowerCase()));
+  const bearishHits = BEARISH_KEYWORDS.filter(w => t.includes(w.toLowerCase()));
+  const bullishCount = bullishHits.length;
+  const bearishCount = bearishHits.length;
+
+  if (bearishCount > bullishCount) return { score: 0, sentiment: 'bearish' };
+  if (bullishCount > bearishCount) return { score: 10, sentiment: 'bullish' };
+  if (bullishCount === 0 && bearishCount === 0) return { score: 5, sentiment: 'neutral' };
+  // 동점이면 중립
+  return { score: 5, sentiment: 'neutral' };
 }
 
 // ─── 뉴스 점수 계산 ───────────────────────────────────────────────────────────
@@ -681,15 +717,15 @@ function calcNewsScore(newsItems) {
     if (i < newsItems.length) {
       const item = newsItems[i];
       const title = typeof item === "string" ? item : (item.title ?? "");
-      const bullish = isArticleBullish(title);
-      const url = (typeof item === "object" && item.url) ? item.url : `https://finance.yahoo.com/`;
-      slots.push({ title, url, pts: bullish ? 10 : 0, bullish });
+      const { score: pts, sentiment } = getArticleScore(title);
+      const url = (typeof item === "object" && item.url) ? item.url : `https://finance.naver.com/`;
+      slots.push({ title, url, pts, bullish: sentiment === 'bullish', sentiment });
     } else {
-      slots.push({ title: "관련 기사 없음", pts: 0, bullish: false });
+      slots.push({ title: "관련 기사 없음", pts: 5, bullish: false, sentiment: 'neutral' });
     }
   }
   const rawScore = slots.reduce((sum, s) => sum + s.pts, 0);
-  const score = Math.round(rawScore * 0.15); // 15% 반영
+  const score = Math.round(rawScore * 0.15); // 15% 반영 (max 15점)
   return { score, rawScore, slots };
 }
 
@@ -936,7 +972,7 @@ export default async function handler(req, res) {
         batch.map(async (stock) => {
           const [quoteRes, newsRes, intradayRes] = await Promise.allSettled([
             fetchQuote(stock.ticker),
-            fetchNews(stock.ticker),
+            fetchNews(stock.ticker, stock.name),
             fetchIntradayData(stock.ticker),
           ]);
 
