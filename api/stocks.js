@@ -530,9 +530,19 @@ async function fetchNews(ticker, stockName = '') {
       const t = title;
       // 종목코드 직접 포함
       if (t.includes(code)) return true;
-      // 종목명 토큰 중 하나라도 포함 (2글자 이상)
-      if (nameTokens.some(token => t.includes(token))) return true;
-      // 네이버 금융 URL 기반 기사는 이미 해당 종목 기사이므로 통과
+      // 종목명 토큰 중 하나라도 포함 (3글자 이상 토큰만 사용)
+      const meaningfulTokens = nameTokens.filter(tok => tok.length >= 3);
+      if (meaningfulTokens.length > 0 && meaningfulTokens.some(token => t.includes(token))) return true;
+      // 2글자 토큰은 완전 일치만 허용 (단어 경계)
+      const shortTokens = nameTokens.filter(tok => tok.length === 2);
+      if (shortTokens.some(token => {
+        // 앞뒤가 한글/영문이 아닌 경우만 매칭 (단어 경계)
+        const idx = t.indexOf(token);
+        if (idx === -1) return false;
+        const before = idx > 0 ? t[idx-1] : ' ';
+        const after = idx + token.length < t.length ? t[idx + token.length] : ' ';
+        return !/[가-힣a-zA-Z0-9]/.test(before) || !/[가-힣a-zA-Z0-9]/.test(after);
+      })) return true;
       return false;
     }
     // 네이버 금융 URL 기반 기사는 관련성 체크 없이 통과 (종목 코드가 URL에 포함됨)
@@ -612,25 +622,13 @@ async function fetchNews(ticker, stockName = '') {
 
     // 관련성 필터 + 중복 제거
     const seen = new Set();
-    // 1차: 관련성 있는 기사만 (네이버/다음 모두)
-    const relevantNews = allNews.filter(n => {
+    // 관련성 있는 기사만 (네이버/다음/구글 모두 동일하게 필터)
+    allNews = allNews.filter(n => {
       if (!n.title || seen.has(n.title)) return false;
       if (!isRelevant(n.title)) return false;
       seen.add(n.title);
       return true;
     });
-    // 2차: 관련성 없어도 네이버 기사면 보충 (관련 기사가 부족할 때)
-    const seen2 = new Set(relevantNews.map(n => n.title));
-    const fallbackNews = allNews.filter(n => {
-      if (!n.title || seen2.has(n.title)) return false;
-      if (!n.fromNaver) return false;
-      seen2.add(n.title);
-      return true;
-    });
-    // 관련 기사가 3개 미만이면 네이버 기사로 보충
-    allNews = relevantNews.length >= 3
-      ? relevantNews
-      : [...relevantNews, ...fallbackNews].slice(0, 10);
 
     // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만, 네이버 파싱 실패 시만)
     const naverCount = allNews.filter(n => n.fromNaver).length;
