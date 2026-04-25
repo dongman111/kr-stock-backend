@@ -1093,7 +1093,7 @@ const CACHE_TTL = 55_000;  // 55초 (Vercel 60초 제한 고려)
 async function _buildStockData() {
   const BATCH = 25;
   const results = [];
-
+  try {
     // 코스피200 3개월 수익률 (RS 비교용) — 한 번만 fetch
     const indexReturn = await fetchIndexReturn();
 
