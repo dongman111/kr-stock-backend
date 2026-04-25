@@ -267,16 +267,47 @@ function rsi(closes, period = 14) {
   return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
 }
 
-// ─── 국내 정규장 여부 판단 ────────────────────────────────────────────────────
-// KST 09:00~15:30 = 정규장
+// ─── 한국 증시 공휴일 목록 ───────────────────────────────────────────────────
+const KR_HOLIDAYS = new Set([
+  '2025-01-01','2025-01-27','2025-01-28','2025-01-29','2025-01-30',
+  '2025-03-01','2025-05-05','2025-05-06','2025-06-06','2025-08-15',
+  '2025-10-03','2025-10-06','2025-10-07','2025-10-08','2025-10-09',
+  '2025-12-25','2025-12-31',
+  '2026-01-01','2026-01-27','2026-01-28','2026-01-29',
+  '2026-03-01','2026-03-02','2026-05-05','2026-05-25','2026-06-06',
+  '2026-08-15','2026-08-17','2026-09-24','2026-09-25','2026-09-26',
+  '2026-10-03','2026-10-05','2026-10-09','2026-12-25','2026-12-31',
+]);
+
+function getKstDate() {
+  const kstStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
+  return new Date(kstStr);
+}
+
+// 휴장 여부 (주말 + 공휴일)
+function isKrHoliday() {
+  const kst = getKstDate();
+  const dow = kst.getDay();
+  if (dow === 0 || dow === 6) return true;
+  const y = kst.getFullYear();
+  const m = String(kst.getMonth() + 1).padStart(2, '0');
+  const d = String(kst.getDate()).padStart(2, '0');
+  return KR_HOLIDAYS.has(`${y}-${m}-${d}`);
+}
+
+// 거래 시간대 여부 (프리마켓 08:00 ~ 에프터마켓 18:00)
+function isMarketHours() {
+  if (isKrHoliday()) return false;
+  const kst = getKstDate();
+  const minOfDay = kst.getHours() * 60 + kst.getMinutes();
+  return minOfDay >= 480 && minOfDay < 1080; // 08:00(480) ~ 18:00(1080)
+}
+
+// 국내 정규장 여부 판단 (KST 09:00~15:30)
 function isRegularSession() {
-  const now = new Date();
-  const kstStr = now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
-  const kst = new Date(kstStr);
-  const h = kst.getHours(), m = kst.getMinutes();
-  const dow = kst.getDay(); // 0=일, 6=토
-  if (dow === 0 || dow === 6) return false;
-  const minOfDay = h * 60 + m;
+  if (isKrHoliday()) return false;
+  const kst = getKstDate();
+  const minOfDay = kst.getHours() * 60 + kst.getMinutes();
   return minOfDay >= 540 && minOfDay < 930; // 09:00(540) ~ 15:30(930)
 }
 
@@ -466,33 +497,55 @@ async function fetchQuote(ticker) {
     return null;
   }
 }
-
-// ─── Yahoo Finance 뉴스 API ───────────────────────────────────────────────────
+// ─── Yahoo Finance 뉴스 API ────────────────────────────────────────────────────
 async function fetchNews(ticker) {
   try {
-    // 코스피 종목은 티커에서 .KS 제거하여 검색
     const searchTicker = ticker.replace('.KS', '').replace('.KQ', '');
     const now = Math.floor(Date.now() / 1000);
-    const cutoff24 = now - 86400;
-    const cutoff72 = now - 259200;
     const cutoff7d = now - 604800;
+    const cutoff30d = now - 2592000;
 
-    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=30&quotesCount=0`;
-    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 8000);
-    if (!resp.ok) return [];
-    const data = await resp.json();
-    const allNews = data?.news ?? [];
+    // 1차: 전체 티커로 검색 (005930.KS 형식)
+    const url1 = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=30&quotesCount=0`;
+    // 2차: 숫자 코드만으로 검색 (005930 형식)
+    const url2 = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(searchTicker)}&newsCount=30&quotesCount=0`;
 
-    // relatedTickers 필터: .KS 포함 또는 숫자코드 포함
-    const strictFilter = (n) => {
+    const [resp1, resp2] = await Promise.allSettled([
+      fetchWithTimeout(url1, { headers: YF_HEADERS }, 8000),
+      fetchWithTimeout(url2, { headers: YF_HEADERS }, 8000),
+    ]);
+
+    let allNews = [];
+    if (resp1.status === 'fulfilled' && resp1.value.ok) {
+      const d = await resp1.value.json();
+      allNews = [...allNews, ...(d?.news ?? [])];
+    }
+    if (resp2.status === 'fulfilled' && resp2.value.ok) {
+      const d = await resp2.value.json();
+      allNews = [...allNews, ...(d?.news ?? [])];
+    }
+
+    // 중복 제거 (uuid 기준)
+    const seen = new Set();
+    allNews = allNews.filter(n => {
+      const id = n.uuid ?? n.link ?? n.title ?? '';
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+    // 필터 전략: relatedTickers 일치 우선, 없으면 전체 반환
+    const matchesTicker = (n) => {
       const related = n.relatedTickers ?? [];
       return related.includes(ticker) || related.includes(searchTicker);
     };
 
-    let filtered = allNews.filter(n => strictFilter(n) && (n.providerPublishTime ?? 0) > cutoff24);
-    if (filtered.length < 5) filtered = allNews.filter(n => strictFilter(n) && (n.providerPublishTime ?? 0) > cutoff72);
-    if (filtered.length < 5) filtered = allNews.filter(n => strictFilter(n) && (n.providerPublishTime ?? 0) > cutoff7d);
-    if (filtered.length === 0) filtered = allNews.filter(n => strictFilter(n));
+    // 단계별 필터링 (7일 내 일치 → 30일 내 일치 → 일치 전체 → 전체 반환)
+    let filtered = allNews.filter(n => matchesTicker(n) && (n.providerPublishTime ?? 0) > cutoff7d);
+    if (filtered.length < 3) filtered = allNews.filter(n => matchesTicker(n) && (n.providerPublishTime ?? 0) > cutoff30d);
+    if (filtered.length < 3) filtered = allNews.filter(n => matchesTicker(n));
+    if (filtered.length === 0) filtered = allNews.filter(n => (n.providerPublishTime ?? 0) > cutoff7d).slice(0, 10);
+    if (filtered.length === 0) filtered = allNews.slice(0, 10);
 
     return filtered.slice(0, 10).map(n => {
       const directLink = n.link ?? "";
@@ -823,16 +876,23 @@ export default async function handler(req, res) {
           if (!q || q.price === 0) return null;
 
           // 5분봉 intraday 데이터 주입
+          const marketOpen = isMarketHours();
           if (intraday) {
             if (typeof intraday.maxVolBarClose === 'number') q.maxVolBarClose = intraday.maxVolBarClose;
             if (typeof intraday.intradayNetBuy === 'number')  q.intradayNetBuy = intraday.intradayNetBuy;
             if (typeof intraday.range10m === 'number')        q.range10m = intraday.range10m;
             if (typeof intraday.range60m === 'number')        q.range60m = intraday.range60m;
             if (typeof intraday.volumePower === 'number')     q.volumePower = intraday.volumePower;
-            // 1분봉 마지막 종가를 실시간 가격으로 덮어씀
-            if (typeof intraday.realtimePrice === 'number' && intraday.realtimePrice > 0) {
+            // 거래 시간대(프리마켓~에프터마켓)에만 1분봉 실시간 가격 사용
+            // 휴장/비장 시간대에는 prevClose(종가) 기준 유지
+            if (marketOpen && typeof intraday.realtimePrice === 'number' && intraday.realtimePrice > 0) {
               q.price = intraday.realtimePrice;
             }
+          }
+          // 휴장 시 price를 prevClose(종가)로 강제 설정
+          if (!marketOpen && q.prevClose > 0) {
+            q.price = q.prevClose;
+            q.chgPct = 0; // 휴장 시 등락률 0
           }
 
           // RS vs 코스피200: 종목 3개월 수익률 계산 + indexReturn 주입
