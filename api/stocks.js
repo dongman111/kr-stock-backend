@@ -498,65 +498,122 @@ async function fetchQuote(ticker) {
   }
 }
 // ─── Yahoo Finance 뉴스 API ────────────────────────────────────────────────────
+// ─── 네이버 금융 뉴스 RSS 파싱 헬퍼 ──────────────────────────────────────────
+function parseRssItems(xmlText) {
+  const items = [];
+  const itemRegex = /<item[^>]*>([\s\S]*?)<\/item>/gi;
+  let itemMatch;
+  while ((itemMatch = itemRegex.exec(xmlText)) !== null) {
+    const block = itemMatch[1];
+    const title = (block.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) ||
+                   block.match(/<title>([^<]*)<\/title>/) || [])[1]?.trim() ?? '';
+    const link  = (block.match(/<link>([^<]*)<\/link>/) ||
+                   block.match(/<originallink>([^<]*)<\/originallink>/) || [])[1]?.trim() ?? '';
+    const pubDate = (block.match(/<pubDate>([^<]*)<\/pubDate>/) || [])[1]?.trim() ?? '';
+    if (title) items.push({ title, url: link, pubDate });
+  }
+  return items;
+}
+
 async function fetchNews(ticker) {
   try {
-    const searchTicker = ticker.replace('.KS', '').replace('.KQ', '');
-    const now = Math.floor(Date.now() / 1000);
-    const cutoff7d = now - 604800;
-    const cutoff30d = now - 2592000;
+    const code = ticker.replace('.KS', '').replace('.KQ', '');
 
-    // 1차: 전체 티커로 검색 (005930.KS 형식)
-    const url1 = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=30&quotesCount=0`;
-    // 2차: 숫자 코드만으로 검색 (005930 형식)
-    const url2 = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(searchTicker)}&newsCount=30&quotesCount=0`;
+    // 1차: 네이버 금융 종목 뉴스 RSS
+    const naverRssUrl = `https://finance.naver.com/item/news_news.naver?code=${code}&page=1&sm=title_entity_id.basic&clusterId=`;
+    // 2차: 네이버 뉴스 검색 API (종목코드 검색)
+    const naverSearchUrl = `https://openapi.naver.com/v1/search/news.json?query=${encodeURIComponent(code)}&display=10&sort=date`;
+    // 3차: 다음 금융 뉴스
+    const daumUrl = `https://finance.daum.net/api/news/stocks/${code}?perPage=10&page=1`;
 
-    const [resp1, resp2] = await Promise.allSettled([
-      fetchWithTimeout(url1, { headers: YF_HEADERS }, 8000),
-      fetchWithTimeout(url2, { headers: YF_HEADERS }, 8000),
+    const NAVER_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'ko-KR,ko;q=0.9',
+      'Referer': 'https://finance.naver.com/',
+    };
+
+    const DAUM_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Referer': 'https://finance.daum.net/',
+      'Origin': 'https://finance.daum.net',
+    };
+
+    const [naverResp, daumResp] = await Promise.allSettled([
+      fetchWithTimeout(naverRssUrl, { headers: NAVER_HEADERS }, 8000),
+      fetchWithTimeout(daumUrl, { headers: DAUM_HEADERS }, 8000),
     ]);
 
     let allNews = [];
-    if (resp1.status === 'fulfilled' && resp1.value.ok) {
-      const d = await resp1.value.json();
-      allNews = [...allNews, ...(d?.news ?? [])];
-    }
-    if (resp2.status === 'fulfilled' && resp2.value.ok) {
-      const d = await resp2.value.json();
-      allNews = [...allNews, ...(d?.news ?? [])];
+
+    // 네이버 금융 HTML 파싱 (뉴스 목록 테이블)
+    if (naverResp.status === 'fulfilled' && naverResp.value.ok) {
+      try {
+        const html = await naverResp.value.text();
+        // 뉴스 제목 추출 (a 태그 title 속성 또는 텍스트)
+        const titleRegex = /class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*href="([^"]*news[^"]*|[^"]*article[^"]*|[^"]*news_read[^"]*)[^"]*"[^>]*(?:title="([^"]*)"|>([^<]*)<)/gi;
+        let m;
+        while ((m = titleRegex.exec(html)) !== null && allNews.length < 10) {
+          const url = m[1] ? (m[1].startsWith('http') ? m[1] : `https://finance.naver.com${m[1]}`) : '';
+          const title = (m[2] || m[3] || '').trim().replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#[0-9]+;/g,'');
+          if (title && title.length > 5) allNews.push({ title, url });
+        }
+        // 보조: 더 넓은 패턴으로 뉴스 제목 추출
+        if (allNews.length < 3) {
+          const altRegex = /<a[^>]+href="([^"]*(?:news_read|article|news)[^"]*?)"[^>]*>([^<]{8,80})<\/a>/gi;
+          while ((m = altRegex.exec(html)) !== null && allNews.length < 10) {
+            const url = m[1].startsWith('http') ? m[1] : `https://finance.naver.com${m[1]}`;
+            const title = m[2].trim().replace(/&amp;/g,'&').replace(/\s+/g,' ');
+            if (title && title.length > 5 && !title.includes('더보기') && !title.includes('이전') && !title.includes('다음')) {
+              allNews.push({ title, url });
+            }
+          }
+        }
+      } catch { /* ignore parse errors */ }
     }
 
-    // 중복 제거 (uuid 기준)
+    // 다음 금융 뉴스 API
+    if (daumResp.status === 'fulfilled' && daumResp.value.ok) {
+      try {
+        const daumData = await daumResp.value.json();
+        const daumItems = daumData?.data ?? daumData?.news ?? daumData?.list ?? [];
+        for (const item of daumItems.slice(0, 10)) {
+          const title = item.title ?? item.subject ?? '';
+          const url = item.url ?? item.link ?? `https://finance.daum.net/quotes/A${code}`;
+          if (title) allNews.push({ title, url });
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 중복 제거
     const seen = new Set();
     allNews = allNews.filter(n => {
-      const id = n.uuid ?? n.link ?? n.title ?? '';
-      if (seen.has(id)) return false;
-      seen.add(id);
+      if (!n.title || seen.has(n.title)) return false;
+      seen.add(n.title);
       return true;
     });
 
-    // 필터 전략: relatedTickers 일치 우선, 없으면 전체 반환
-    const matchesTicker = (n) => {
-      const related = n.relatedTickers ?? [];
-      return related.includes(ticker) || related.includes(searchTicker);
-    };
+    // 결과가 없으면 Yahoo Finance fallback
+    if (allNews.length === 0) {
+      try {
+        const yfUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=10&quotesCount=0`;
+        const yfResp = await fetchWithTimeout(yfUrl, { headers: YF_HEADERS }, 8000);
+        if (yfResp.ok) {
+          const yfData = await yfResp.json();
+          for (const n of (yfData?.news ?? []).slice(0, 10)) {
+            allNews.push({ title: n.title ?? '', url: n.link ?? '' });
+          }
+        }
+      } catch { /* ignore */ }
+    }
 
-    // 단계별 필터링 (7일 내 일치 → 30일 내 일치 → 일치 전체 → 전체 반환)
-    let filtered = allNews.filter(n => matchesTicker(n) && (n.providerPublishTime ?? 0) > cutoff7d);
-    if (filtered.length < 3) filtered = allNews.filter(n => matchesTicker(n) && (n.providerPublishTime ?? 0) > cutoff30d);
-    if (filtered.length < 3) filtered = allNews.filter(n => matchesTicker(n));
-    if (filtered.length === 0) filtered = allNews.filter(n => (n.providerPublishTime ?? 0) > cutoff7d).slice(0, 10);
-    if (filtered.length === 0) filtered = allNews.slice(0, 10);
-
-    return filtered.slice(0, 10).map(n => {
-      const directLink = n.link ?? "";
-      const fallbackLink = `https://finance.yahoo.com/quote/${ticker}/news/`;
-      return {
-        title: n.title ?? "",
-        url: directLink || fallbackLink,
-        publishTime: n.providerPublishTime ?? 0,
-        relatedTickers: n.relatedTickers ?? [],
-      };
-    });
+    return allNews.slice(0, 10).map(n => ({
+      title: n.title ?? '',
+      url: n.url || `https://finance.naver.com/item/news.naver?code=${code}`,
+      publishTime: 0,
+      relatedTickers: [],
+    }));
   } catch {
     return [];
   }
@@ -952,10 +1009,24 @@ export default async function handler(req, res) {
       very_risky: results.filter(r => r.riskLevel === "very_risky").slice(0, 5),
     };
 
+    // 현재 세션 정보 계산
+    const holiday = isKrHoliday();
+    let sessionLabel = '휴장';
+    if (!holiday) {
+      const kst = getKstDate();
+      const minOfDay = kst.getHours() * 60 + kst.getMinutes();
+      if (minOfDay >= 480 && minOfDay < 540)       sessionLabel = '프리마켓';
+      else if (minOfDay >= 540 && minOfDay < 930)  sessionLabel = '정규장';
+      else if (minOfDay >= 930 && minOfDay < 1080) sessionLabel = '에프터마켓';
+      else                                          sessionLabel = '휴장';
+    }
+
     return res.status(200).json({
       ok: true,
       updatedAt: new Date().toISOString(),
       total: results.length,
+      session: sessionLabel,
+      isHoliday: holiday,
       grouped,
       all: results,
     });
