@@ -20,8 +20,8 @@ import iconv from 'iconv-lite';
 
 const STOCKS = [
   // ── 매우 안전 (40개) ─────────────────────────────────────────────────────
-  { ticker:"005930.KS", name:"삼성전자",           risk:"very_safe", sector:["반도체", "메모리", "파운드리", "HBM", "AI칩"] },
-  { ticker:"000660.KS", name:"SK하이닉스",          risk:"very_safe", sector:["반도체", "메모리", "HBM", "D램", "낸드"] },
+  { ticker:"005930.KS", name:"삼성전자",           risk:"very_safe", sector:["삼성전자", "삼성전자주식", "삼성전자주가"] },
+  { ticker:"000660.KS", name:"SK하이닉스",          risk:"very_safe", sector:["SK하이닉스", "SK하이닉스주가", "HBM"] },
   { ticker:"005380.KS", name:"현대차",              risk:"very_safe", sector:["자동차", "현대차", "전기차", "수소차"] },
   { ticker:"000270.KS", name:"기아",                risk:"very_safe", sector:["자동차", "기아", "전기차"] },
   { ticker:"105560.KS", name:"KB금융",              risk:"very_safe", sector:["금융", "은행", "KB금융", "금리"] },
@@ -531,7 +531,8 @@ const PR_KEYWORDS = [
   '사회공헌', 'CSR', '봉사활동', '기부', '후원',
   '신입사원', '채용', '인턴', '공채',
   '사옥 이전', '사옥 오픈', '리뉴얼 오픈',
-  '협약 체결', '업무협약', 'MOU', '파트너십 체결',  // 단순 MOU는 제외, 대형 계약은 허용
+  '협약 체결', '업무협약', 'MOU', '파트너십 체결',
+  '홈경기', '야구', '스포츠 관람', '입장권', '세금포인트',  // 스포츠 이벤트
 ];
 // 단, 대형 계약/사업 확장은 주가 영향 있으므로 예외 처리
 const PR_EXCEPTION_KEYWORDS = [
@@ -563,7 +564,7 @@ function isSimilarTitle(t1, t2) {
   const longer = words1.length <= words2.length ? words2 : words1;
   if (shorter.length === 0) return false;
   const matches = shorter.filter(w => longer.includes(w)).length;
-  return matches / shorter.length >= 0.8;
+  return matches / shorter.length >= 0.6;
 }
 
 function isRelevant(title) {
