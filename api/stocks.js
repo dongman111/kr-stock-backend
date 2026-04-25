@@ -592,7 +592,7 @@ async function fetchNews(ticker, stockName = '') {
             .replace(/&hellip;/g, '…').replace(/&middot;/g, '·').replace(/&harr;/g, '↔')
             .replace(/&nbsp;/g, ' ').replace(/&#[0-9]+;/g, '').replace(/&[a-z]+;/g, '')
             .replace(/\s+/g, ' ').trim();
-          if (title && title.length > 3) allNews.push({ title, url, fromNaver: true });
+          if (title && title.length > 3) allNews.push({ title, url, fromNaver: true, naverRelevant: isRelevant(title) });
         }
       } catch (e) { /* ignore parse errors */ }
     }
@@ -612,13 +612,25 @@ async function fetchNews(ticker, stockName = '') {
 
     // 관련성 필터 + 중복 제거
     const seen = new Set();
-    allNews = allNews.filter(n => {
+    // 1차: 관련성 있는 기사만 (네이버/다음 모두)
+    const relevantNews = allNews.filter(n => {
       if (!n.title || seen.has(n.title)) return false;
+      if (!isRelevant(n.title)) return false;
       seen.add(n.title);
-      // 네이버 금융 기사는 이미 해당 종목 기사 (URL에 종목코드 포함)
-      if (n.fromNaver || isNaverStockNews(n.url)) return true;
-      return isRelevant(n.title); // 그 외는 관련성 필터 적용
+      return true;
     });
+    // 2차: 관련성 없어도 네이버 기사면 보충 (관련 기사가 부족할 때)
+    const seen2 = new Set(relevantNews.map(n => n.title));
+    const fallbackNews = allNews.filter(n => {
+      if (!n.title || seen2.has(n.title)) return false;
+      if (!n.fromNaver) return false;
+      seen2.add(n.title);
+      return true;
+    });
+    // 관련 기사가 3개 미만이면 네이버 기사로 보충
+    allNews = relevantNews.length >= 3
+      ? relevantNews
+      : [...relevantNews, ...fallbackNews].slice(0, 10);
 
     // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만, 네이버 파싱 실패 시만)
     const naverCount = allNews.filter(n => n.fromNaver).length;
