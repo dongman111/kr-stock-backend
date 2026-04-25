@@ -642,26 +642,29 @@ async function fetchNews(ticker, stockName = '', sectorKeywords = []) {
         return true;
       });
 
-    // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만, 네이버 파싱 실패 시만)
+    // 결과가 부족하면 구글 뉴스 RSS fallback
     const naverCount = allNews.filter(n => n.fromNaver).length;
     if (naverCount < 3 && allNews.length < 5) {
       try {
-        const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(stockName || code)}&hl=ko&gl=KR&ceid=KR:ko`;
+        // 한글 종목명으로 검색 (더 정확한 한국어 기사)
+        const searchQuery = stockName ? `${stockName} 주식` : code;
+        const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(searchQuery)}&hl=ko&gl=KR&ceid=KR:ko`;
         const gResp = await fetchWithTimeout(googleRssUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/rss+xml,application/xml' }
-        }, 3000);
+        }, 4000);
         if (gResp.ok) {
           const xml = await gResp.text();
-          // <title> 태그 추출 (첫 번째는 피드 제목이므로 skip)
           const titleMatches = [...xml.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[([^\]]+)\]\]><\/title>[\s\S]*?<link>([^<]+)<\/link>/gi)];
-          for (const tm of titleMatches.slice(0, 10)) {
+          for (const tm of titleMatches.slice(0, 15)) {
             const title = tm[1].replace(/<[^>]+>/g, '').trim().replace(/\s+/g, ' ');
             const url = tm[2].trim();
-            // 한국어 포함 여부 확인 (영어만인 기사 제외)
+            // 한국어 또는 종목명(영문) 포함 기사 허용
             const hasKorean = /[가-힣]/.test(title);
-            // 구글 RSS는 관련성 필터 엄격 적용 (종목명 토큰이 제목에 반드시 포함)
-            if (hasKorean && title.length > 3 && isRelevant(title)) {
-              allNews.push({ title, url, fromGoogle: true });
+            const hasEnglishName = stockName && /^[A-Z]/.test(stockName) && title.toUpperCase().includes(stockName.toUpperCase());
+            // 관련성 필터 적용
+            const rel = isRelevant(title);
+            if ((hasKorean || hasEnglishName) && title.length > 3 && rel) {
+              allNews.push({ title, url, fromGoogle: true, priority: rel === 'sector' ? 1 : 3 });
             }
           }
         }
