@@ -620,8 +620,9 @@ async function fetchNews(ticker, stockName = '') {
       return isRelevant(n.title); // 그 외는 관련성 필터 적용
     });
 
-    // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만)
-    if (allNews.length < 5) {
+    // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만, 네이버 파싱 실패 시만)
+    const naverCount = allNews.filter(n => n.fromNaver).length;
+    if (naverCount < 3 && allNews.length < 5) {
       try {
         const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(stockName || code)}&hl=ko&gl=KR&ceid=KR:ko`;
         const gResp = await fetchWithTimeout(googleRssUrl, {
@@ -636,8 +637,9 @@ async function fetchNews(ticker, stockName = '') {
             const url = tm[2].trim();
             // 한국어 포함 여부 확인 (영어만인 기사 제외)
             const hasKorean = /[가-힣]/.test(title);
+            // 구글 RSS는 관련성 필터 엄격 적용 (종목명 토큰이 제목에 반드시 포함)
             if (hasKorean && title.length > 3 && isRelevant(title)) {
-              allNews.push({ title, url });
+              allNews.push({ title, url, fromGoogle: true });
             }
           }
         }
