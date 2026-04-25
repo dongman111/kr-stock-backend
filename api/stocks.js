@@ -1085,19 +1085,14 @@ async function fetchIndexReturn() {
   }
 }
 
-// ─── 메인 API 핸들러 ─────────────────────────────────────────────────────────
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  res.setHeader("Pragma", "no-cache");
+// ─── 인메모리 캐시 ───────────────────────────────────────────────────────────
+let _cache = null;         // { data, timestamp }
+let _isComputing = false;  // 중복 계산 방지
+const CACHE_TTL = 55_000;  // 55초 (Vercel 60초 제한 고려)
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-
-  try {
-    const BATCH = 25;
-    const results = [];
+async function _buildStockData() {
+  const BATCH = 25;
+  const results = [];
 
     // 코스피200 3개월 수익률 (RS 비교용) — 한 번만 fetch
     const indexReturn = await fetchIndexReturn();
@@ -1205,7 +1200,7 @@ export default async function handler(req, res) {
       else                                          sessionLabel = '휴장';
     }
 
-    return res.status(200).json({
+    return {
       ok: true,
       updatedAt: new Date().toISOString(),
       total: results.length,
@@ -1213,10 +1208,51 @@ export default async function handler(req, res) {
       isHoliday: holiday,
       grouped,
       all: results,
-    });
+    };
 
   } catch (err) {
+    console.error("_buildStockData error:", err);
+    throw err;
+  }
+}
+
+// ─── 메인 API 핸들러 ─────────────────────────────────────────────────────────
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+
+  if (req.method === "OPTIONS") return res.status(200).end();
+
+  const now = Date.now();
+  const cacheAge = _cache ? now - _cache.timestamp : Infinity;
+
+  // 케시가 유효하면 즉시 반환 + 백그라운드 갱신 트리거
+  if (_cache && cacheAge < CACHE_TTL) {
+    if (!_isComputing) {
+      // 케시 만료 10초 전부터 백그라운드 사전 갱신
+      if (cacheAge > CACHE_TTL - 10_000) {
+        _isComputing = true;
+        _buildStockData()
+          .then(data => { _cache = { data, timestamp: Date.now() }; })
+          .catch(e => console.error('bg refresh error:', e))
+          .finally(() => { _isComputing = false; });
+      }
+    }
+    return res.status(200).json(_cache.data);
+  }
+
+  // 케시 없거나 만료됨 → 직접 계산
+  try {
+    const data = await _buildStockData();
+    _cache = { data, timestamp: Date.now() };
+    return res.status(200).json(data);
+  } catch (err) {
     console.error("KR Stock API Error:", err);
+    // 케시가 있으면 만료된 케시라도 반환 (실패 시 폴백)
+    if (_cache) return res.status(200).json(_cache.data);
     return res.status(500).json({ ok: false, error: err.message || "Internal server error" });
   }
 }
