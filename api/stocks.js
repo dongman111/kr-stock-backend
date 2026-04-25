@@ -1,4 +1,5 @@
 // KR Stock Predictor Backend v1
+const iconv = require('iconv-lite');
 // 코스피200 전체 종목 분석 — 기관 관점 국내 주식 추천
 // 점수 체계: 기관매수 10개×10점(100점→45% = 45점 반영)
 //            차트분석 10개×10점(100점→40% = 40점 반영)
@@ -567,37 +568,21 @@ async function fetchNews(ticker, stockName = '') {
     if (naverResp.status === 'fulfilled' && naverResp.value.ok) {
       try {
         const buf = await naverResp.value.arrayBuffer();
-        let html;
-        try {
-          // iconv-lite로 EUC-KR 디코딩 시도
-          const iconv = await import('iconv-lite');
-          html = iconv.decode(Buffer.from(buf), 'euc-kr');
-        } catch {
-          // fallback: latin1 (URL은 정상 추출, 한글은 깨진 상태)
-          html = Buffer.from(buf).toString('latin1');
-        }
-        // class="tit" 링크 패턴 (실제 네이버 금융 구조)
-        const titRegex = /class="tit"[^>]*>([^<]{5,120})<\/a>/gi;
+        // iconv-lite로 EUC-KR → UTF-8 디코딩
+        const html = iconv.decode(Buffer.from(buf), 'euc-kr');
+        // class="title" 안의 <a href="/item/news_read.naver..."> 패턴
+        // 이 패턴은 해당 종목과 직접 연관된 기사만 포함
+        const titleRegex = /<td class="title">\s*<a href="(\/item\/news_read\.naver[^"]+)"[^>]*>([^<]{5,120})<\/a>/gi;
         let m;
-        while ((m = titRegex.exec(html)) !== null && allNews.length < 10) {
-          const title = m[1].trim()
+        while ((m = titleRegex.exec(html)) !== null && allNews.length < 15) {
+          const url = `https://finance.naver.com${m[1]}`;
+          const title = m[2].trim()
             .replace(/&ldquo;/g, '"').replace(/&rdquo;/g, '"')
             .replace(/&lsquo;/g, "'").replace(/&rsquo;/g, "'")
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
             .replace(/&hellip;/g, '…').replace(/&#[0-9]+;/g, '').replace(/\s+/g, ' ');
-          if (title && title.length > 3) allNews.push({ title, url: '' });
+          if (title && title.length > 3) allNews.push({ title, url });
         }
-        // URL 추출 및 매핑
-        const urlRegex = /href="(\/item\/news_read\.naver\?[^"]+)"/gi;
-        const urls = [];
-        let um;
-        while ((um = urlRegex.exec(html)) !== null && urls.length < 10) {
-          urls.push(`https://finance.naver.com${um[1]}`);
-        }
-        allNews = allNews.map((item, i) => ({
-          ...item,
-          url: urls[i] || `https://finance.naver.com/item/news.naver?code=${code}`
-        }));
       } catch (e) { /* ignore parse errors */ }
     }
 
