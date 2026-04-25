@@ -1,0 +1,11 @@
+{
+  "name": "kr-stock-predictor-backend",
+  "version": "1.0.0",
+  "description": "코스피200 기관 관점 국내 주식 추천 백엔드 API",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3"
+  }
+}
