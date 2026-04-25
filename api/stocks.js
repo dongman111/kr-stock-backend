@@ -524,7 +524,49 @@ async function fetchNews(ticker, stockName = '', sectorKeywords = []) {
       ? stockName.replace(/[()\[\]]/g, '').split(/[\s·&,]+/).filter(t => t.length >= 2)
       : [];
     // 관련성 체크: 제목에 종목명 토큰 또는 종목코드가 포함되어야 함
-    function isRelevant(title) {
+    // 광고성/홍보성 기사 필터 (주가 영향 없는 기사)
+const PR_KEYWORDS = [
+  '파트너스데이', '고객 소통', '디지털 소통', '크리에이터 조직',
+  '행사 개최', '이벤트 개최', '캠페인 시작', '프로모션',
+  '사회공헌', 'CSR', '봉사활동', '기부', '후원',
+  '신입사원', '채용', '인턴', '공채',
+  '사옥 이전', '사옥 오픈', '리뉴얼 오픈',
+  '협약 체결', '업무협약', 'MOU', '파트너십 체결',  // 단순 MOU는 제외, 대형 계약은 허용
+];
+// 단, 대형 계약/사업 확장은 주가 영향 있으므로 예외 처리
+const PR_EXCEPTION_KEYWORDS = [
+  '수주', '계약', '사업', '투자', '인수', '합병', '상장', '공모',
+  '실적', '매출', '영업이익', '순이익', '목표주가', '애널리스트',
+  '데이터센터', '클라우드', '반도체', '공장', '플랜트',
+];
+function isPRArticle(title) {
+  if (!title) return false;
+  const t = title;
+  const hasPR = PR_KEYWORDS.some(w => t.includes(w));
+  if (!hasPR) return false;
+  // 예외: 대형 사업/계약 관련이면 광고성 아님
+  const hasException = PR_EXCEPTION_KEYWORDS.some(w => t.includes(w));
+  return !hasException;
+}
+
+// 중복 기사 제목 유사도 체크 (같은 사건 다른 언론사)
+function isSimilarTitle(t1, t2) {
+  if (!t1 || !t2) return false;
+  // 핵심 키워드 추출 (조사/접속사 제거)
+  const clean = (t) => t.replace(/[,\.\[\]\(\)'"\…·]/g, ' ').replace(/\s+/g, ' ').trim();
+  const c1 = clean(t1), c2 = clean(t2);
+  if (c1 === c2) return true;
+  // 한쪽이 다른쪽을 80% 이상 포함하면 중복
+  const words1 = c1.split(' ').filter(w => w.length > 1);
+  const words2 = c2.split(' ').filter(w => w.length > 1);
+  const shorter = words1.length <= words2.length ? words1 : words2;
+  const longer = words1.length <= words2.length ? words2 : words1;
+  if (shorter.length === 0) return false;
+  const matches = shorter.filter(w => longer.includes(w)).length;
+  return matches / shorter.length >= 0.8;
+}
+
+function isRelevant(title) {
       if (!title) return false;
       if (nameTokens.length === 0) return true; // 종목명 없으면 필터 없음
       const t = title;
@@ -632,13 +674,20 @@ async function fetchNews(ticker, stockName = '', sectorKeywords = []) {
       else priority = 0;
       return { ...n, priority };
     }).filter(n => n.priority > 0 && n.title);
-    // 중복 제거 후 우선순위 정렬
+    // 광고성 기사 제거
+    const filtered = scored.filter(n => !isPRArticle(n.title));
+    // 중복 제거 (유사 제목 포함) 후 우선순위 정렬
     const seen2 = new Set();
-    allNews = scored
+    const uniqueTitles = [];
+    allNews = filtered
       .sort((a, b) => b.priority - a.priority)
       .filter(n => {
         if (seen2.has(n.title)) return false;
+        // 유사 제목 체크
+        const isSim = uniqueTitles.some(t => isSimilarTitle(t, n.title));
+        if (isSim) return false;
         seen2.add(n.title);
+        uniqueTitles.push(n.title);
         return true;
       });
 
@@ -646,8 +695,11 @@ async function fetchNews(ticker, stockName = '', sectorKeywords = []) {
     const naverCount = allNews.filter(n => n.fromNaver).length;
     if (naverCount < 3 && allNews.length < 5) {
       try {
-        // 한글 종목명으로 검색 (더 정확한 한국어 기사)
-        const searchQuery = stockName ? `${stockName} 주식` : code;
+        // 한글 종목명으로 검색 (sector[0]이 한글 이름인 경우 우선 사용)
+        const koreanName = sectorKeywords && sectorKeywords.length > 0 && /[가-힣]/.test(sectorKeywords[0])
+          ? sectorKeywords[0]
+          : stockName;
+        const searchQuery = koreanName ? `${koreanName} 주식` : code;
         const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(searchQuery)}&hl=ko&gl=KR&ceid=KR:ko`;
         const gResp = await fetchWithTimeout(googleRssUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/rss+xml,application/xml' }
