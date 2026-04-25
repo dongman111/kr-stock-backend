@@ -1,5 +1,5 @@
 // KR Stock Predictor Backend v1
-const iconv = require('iconv-lite');
+import iconv from 'iconv-lite';
 // 코스피200 전체 종목 분석 — 기관 관점 국내 주식 추천
 // 점수 체계: 기관매수 10개×10점(100점→45% = 45점 반영)
 //            차트분석 10개×10점(100점→40% = 40점 반영)
@@ -572,15 +572,19 @@ async function fetchNews(ticker, stockName = '') {
         const html = iconv.decode(Buffer.from(buf), 'euc-kr');
         // class="title" 안의 <a href="/item/news_read.naver..."> 패턴
         // 이 패턴은 해당 종목과 직접 연관된 기사만 포함
-        const titleRegex = /<td class="title">\s*<a href="(\/item\/news_read\.naver[^"]+)"[^>]*>([^<]{5,120})<\/a>/gi;
+        // 실제 네이버 구조: class="tit" 링크 추출
+        const titleRegex = /<td[^>]*class="title"[^>]*>[\s\S]*?<a href="(\/item\/news_read\.naver[^"]+)"[^>]*class="tit"[^>]*>([\s\S]{5,200}?)<\/a>/gi;
         let m;
         while ((m = titleRegex.exec(html)) !== null && allNews.length < 15) {
           const url = `https://finance.naver.com${m[1]}`;
-          const title = m[2].trim()
-            .replace(/&ldquo;/g, '"').replace(/&rdquo;/g, '"')
+          const rawTitle = m[2].trim();
+          const title = rawTitle
+            .replace(/&quot;/g, '"').replace(/&ldquo;/g, '"').replace(/&rdquo;/g, '"')
             .replace(/&lsquo;/g, "'").replace(/&rsquo;/g, "'")
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-            .replace(/&hellip;/g, '…').replace(/&#[0-9]+;/g, '').replace(/\s+/g, ' ');
+            .replace(/&hellip;/g, '…').replace(/&middot;/g, '·').replace(/&harr;/g, '↔')
+            .replace(/&nbsp;/g, ' ').replace(/&#[0-9]+;/g, '').replace(/&[a-z]+;/g, '')
+            .replace(/\s+/g, ' ').trim();
           if (title && title.length > 3) allNews.push({ title, url });
         }
       } catch (e) { /* ignore parse errors */ }
@@ -607,15 +611,25 @@ async function fetchNews(ticker, stockName = '') {
       return isRelevant(n.title); // 종목 관련 기사만 통과
     });
 
-    // 결과가 없으면 Yahoo Finance fallback
-    if (allNews.length === 0) {
+    // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만)
+    if (allNews.length < 5) {
       try {
-        const yfUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=10&quotesCount=0`;
-        const yfResp = await fetchWithTimeout(yfUrl, { headers: YF_HEADERS }, 3000);
-        if (yfResp.ok) {
-          const yfData = await yfResp.json();
-          for (const n of (yfData?.news ?? []).slice(0, 10)) {
-            allNews.push({ title: n.title ?? '', url: n.link ?? '' });
+        const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(stockName || code)}&hl=ko&gl=KR&ceid=KR:ko`;
+        const gResp = await fetchWithTimeout(googleRssUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/rss+xml,application/xml' }
+        }, 3000);
+        if (gResp.ok) {
+          const xml = await gResp.text();
+          // <title> 태그 추출 (첫 번째는 피드 제목이므로 skip)
+          const titleMatches = [...xml.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[([^\]]+)\]\]><\/title>[\s\S]*?<link>([^<]+)<\/link>/gi)];
+          for (const tm of titleMatches.slice(0, 10)) {
+            const title = tm[1].trim().replace(/\s+/g, ' ');
+            const url = tm[2].trim();
+            // 한국어 포함 여부 확인 (영어만인 기사 제외)
+            const hasKorean = /[가-힣]/.test(title);
+            if (hasKorean && title.length > 3 && isRelevant(title)) {
+              allNews.push({ title, url });
+            }
           }
         }
       } catch { /* ignore */ }
