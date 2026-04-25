@@ -1,0 +1,907 @@
+// KR Stock Predictor Backend v1
+// 코스피200 전체 종목 분석 — 기관 관점 국내 주식 추천
+// 점수 체계: 기관매수 10개×10점(100점→45% = 45점 반영)
+//            차트분석 10개×10점(100점→40% = 40점 반영)
+//            뉴스분석 10기사×10점(100점→15% = 15점 반영)
+// 총점 = 기관(0~45) + 차트(0~40) + 뉴스(0~15) = 0~100점
+//
+// Yahoo Finance 티커: {종목코드}.KS (코스피)
+// 벤치마크: ^KS200 (코스피200 지수)
+// 장 시간: KST 09:00~15:30 (정규장), KST 08:00~09:00 (프리마켓), KST 15:30~18:00 (에프터마켓)
+
+// ─── 코스피200 전체 종목 위험도 분류 ─────────────────────────────────────────
+// 위험도 기준:
+//   매우안전: 시총 상위 대형 방어주 (금융, 통신, 필수소비재, 유틸리티)
+//   안전:     대형 우량주 (자동차, 반도체 대형, 건설, 화학 대형)
+//   보통:     중대형 성장주 (IT, 바이오 대형, 산업재)
+//   위험:     중소형 성장주, 사이클 산업 (2차전지, 조선, 항공)
+//   매우위험: 소형 성장주, 고변동성 (게임, 바이오 소형, 테마주)
+
+const STOCKS = [
+  // ── 매우 안전 (40개) ─────────────────────────────────────────────────────
+  { ticker:"005930.KS", name:"삼성전자",           risk:"very_safe" },
+  { ticker:"000660.KS", name:"SK하이닉스",          risk:"very_safe" },
+  { ticker:"005380.KS", name:"현대차",              risk:"very_safe" },
+  { ticker:"000270.KS", name:"기아",                risk:"very_safe" },
+  { ticker:"105560.KS", name:"KB금융",              risk:"very_safe" },
+  { ticker:"055550.KS", name:"신한지주",            risk:"very_safe" },
+  { ticker:"086790.KS", name:"하나금융지주",        risk:"very_safe" },
+  { ticker:"316140.KS", name:"우리금융지주",        risk:"very_safe" },
+  { ticker:"033780.KS", name:"KT&G",               risk:"very_safe" },
+  { ticker:"030200.KS", name:"KT",                 risk:"very_safe" },
+  { ticker:"017670.KS", name:"SK텔레콤",           risk:"very_safe" },
+  { ticker:"032640.KS", name:"LG유플러스",          risk:"very_safe" },
+  { ticker:"015760.KS", name:"한국전력",            risk:"very_safe" },
+  { ticker:"036460.KS", name:"한국가스공사",        risk:"very_safe" },
+  { ticker:"000810.KS", name:"삼성화재",            risk:"very_safe" },
+  { ticker:"001450.KS", name:"현대해상",            risk:"very_safe" },
+  { ticker:"005830.KS", name:"DB손해보험",          risk:"very_safe" },
+  { ticker:"088350.KS", name:"한화생명",            risk:"very_safe" },
+  { ticker:"032830.KS", name:"삼성생명",            risk:"very_safe" },
+  { ticker:"138040.KS", name:"메리츠금융지주",      risk:"very_safe" },
+  { ticker:"004370.KS", name:"농심",               risk:"very_safe" },
+  { ticker:"007310.KS", name:"오뚜기",              risk:"very_safe" },
+  { ticker:"271560.KS", name:"오리온",              risk:"very_safe" },
+  { ticker:"003230.KS", name:"삼양식품",            risk:"very_safe" },
+  { ticker:"000080.KS", name:"하이트진로",          risk:"very_safe" },
+  { ticker:"097950.KS", name:"CJ제일제당",          risk:"very_safe" },
+  { ticker:"001680.KS", name:"대상",               risk:"very_safe" },
+  { ticker:"026960.KS", name:"동서",               risk:"very_safe" },
+  { ticker:"280360.KS", name:"롯데웰푸드",          risk:"very_safe" },
+  { ticker:"005300.KS", name:"롯데칠성",            risk:"very_safe" },
+  { ticker:"139480.KS", name:"이마트",              risk:"very_safe" },
+  { ticker:"004170.KS", name:"신세계",              risk:"very_safe" },
+  { ticker:"071320.KS", name:"한국지역난방공사",    risk:"very_safe" },
+  { ticker:"024110.KS", name:"기업은행",            risk:"very_safe" },
+  { ticker:"138930.KS", name:"BNK금융지주",         risk:"very_safe" },
+  { ticker:"175330.KS", name:"JB금융지주",          risk:"very_safe" },
+  { ticker:"039490.KS", name:"키움증권",            risk:"very_safe" },
+  { ticker:"071050.KS", name:"한국금융지주",        risk:"very_safe" },
+  { ticker:"006800.KS", name:"미래에셋증권",        risk:"very_safe" },
+  { ticker:"005940.KS", name:"NH투자증권",          risk:"very_safe" },
+
+  // ── 안전 (40개) ──────────────────────────────────────────────────────────
+  { ticker:"005490.KS", name:"POSCO홀딩스",         risk:"safe" },
+  { ticker:"012330.KS", name:"현대모비스",          risk:"safe" },
+  { ticker:"051910.KS", name:"LG화학",              risk:"safe" },
+  { ticker:"003550.KS", name:"LG",                 risk:"safe" },
+  { ticker:"066570.KS", name:"LG전자",              risk:"safe" },
+  { ticker:"034730.KS", name:"SK",                 risk:"safe" },
+  { ticker:"096770.KS", name:"SK이노베이션",        risk:"safe" },
+  { ticker:"009150.KS", name:"삼성전기",            risk:"safe" },
+  { ticker:"018260.KS", name:"삼성SDS",             risk:"safe" },
+  { ticker:"028260.KS", name:"삼성물산",            risk:"safe" },
+  { ticker:"010140.KS", name:"삼성중공업",          risk:"safe" },
+  { ticker:"047810.KS", name:"한국항공우주",        risk:"safe" },
+  { ticker:"012450.KS", name:"한화에어로스페이스",  risk:"safe" },
+  { ticker:"272210.KS", name:"한화시스템",          risk:"safe" },
+  { ticker:"079550.KS", name:"LIG넥스원",           risk:"safe" },
+  { ticker:"000720.KS", name:"현대건설",            risk:"safe" },
+  { ticker:"047040.KS", name:"대우건설",            risk:"safe" },
+  { ticker:"375500.KS", name:"DL이앤씨",            risk:"safe" },
+  { ticker:"006360.KS", name:"GS건설",              risk:"safe" },
+  { ticker:"028050.KS", name:"삼성E&A",             risk:"safe" },
+  { ticker:"010130.KS", name:"고려아연",            risk:"safe" },
+  { ticker:"004020.KS", name:"현대제철",            risk:"safe" },
+  { ticker:"002030.KS", name:"아시아나항공",        risk:"safe" },  // Asia Holdings
+  { ticker:"011200.KS", name:"HMM",                risk:"safe" },
+  { ticker:"003490.KS", name:"대한항공",            risk:"safe" },
+  { ticker:"086280.KS", name:"현대글로비스",        risk:"safe" },
+  { ticker:"000120.KS", name:"CJ대한통운",          risk:"safe" },
+  { ticker:"028670.KS", name:"팬오션",              risk:"safe" },
+  { ticker:"078930.KS", name:"GS",                 risk:"safe" },
+  { ticker:"009830.KS", name:"한화솔루션",          risk:"safe" },
+  { ticker:"267250.KS", name:"HD현대",              risk:"safe" },
+  { ticker:"009540.KS", name:"HD한국조선해양",      risk:"safe" },
+  { ticker:"329180.KS", name:"HD현대중공업",        risk:"safe" },
+  { ticker:"042660.KS", name:"한화오션",            risk:"safe" },
+  { ticker:"034020.KS", name:"두산에너빌리티",      risk:"safe" },
+  { ticker:"000150.KS", name:"두산",               risk:"safe" },
+  { ticker:"241560.KS", name:"두산밥캣",            risk:"safe" },
+  { ticker:"006260.KS", name:"LS",                 risk:"safe" },
+  { ticker:"010120.KS", name:"LS ELECTRIC",        risk:"safe" },
+  { ticker:"001040.KS", name:"CJ",                 risk:"safe" },
+
+  // ── 보통 (40개) ──────────────────────────────────────────────────────────
+  { ticker:"035420.KS", name:"NAVER",              risk:"moderate" },
+  { ticker:"035720.KS", name:"카카오",              risk:"moderate" },
+  { ticker:"259960.KS", name:"크래프톤",            risk:"moderate" },
+  { ticker:"352820.KS", name:"하이브",              risk:"moderate" },
+  { ticker:"035250.KS", name:"강원랜드",            risk:"moderate" },
+  { ticker:"114090.KS", name:"GKL",                risk:"moderate" },
+  { ticker:"034230.KS", name:"파라다이스",          risk:"moderate" },
+  { ticker:"008770.KS", name:"호텔신라",            risk:"moderate" },
+  { ticker:"069960.KS", name:"현대백화점",          risk:"moderate" },
+  { ticker:"023530.KS", name:"롯데쇼핑",            risk:"moderate" },
+  { ticker:"068270.KS", name:"셀트리온",            risk:"moderate" },
+  { ticker:"207940.KS", name:"삼성바이오로직스",    risk:"moderate" },
+  { ticker:"006280.KS", name:"녹십자",              risk:"moderate" },
+  { ticker:"128940.KS", name:"한미약품",            risk:"moderate" },
+  { ticker:"069620.KS", name:"대웅제약",            risk:"moderate" },
+  { ticker:"185750.KS", name:"종근당",              risk:"moderate" },
+  { ticker:"000100.KS", name:"유한양행",            risk:"moderate" },
+  { ticker:"090430.KS", name:"아모레퍼시픽",        risk:"moderate" },
+  { ticker:"051900.KS", name:"LG생활건강",          risk:"moderate" },
+  { ticker:"161890.KS", name:"콜마코리아",          risk:"moderate" },
+  { ticker:"192820.KS", name:"코스맥스",            risk:"moderate" },
+  { ticker:"011070.KS", name:"LG이노텍",            risk:"moderate" },
+  { ticker:"034220.KS", name:"LG디스플레이",        risk:"moderate" },
+  { ticker:"064400.KS", name:"LG CNS",             risk:"moderate" },
+  { ticker:"307950.KS", name:"현대오토에버",        risk:"moderate" },
+  { ticker:"022100.KS", name:"포스코DX",            risk:"moderate" },
+  { ticker:"047050.KS", name:"포스코인터내셔널",    risk:"moderate" },
+  { ticker:"003670.KS", name:"포스코퓨처엠",        risk:"moderate" },
+  { ticker:"011780.KS", name:"금호석유화학",        risk:"moderate" },
+  { ticker:"120110.KS", name:"코오롱인더",          risk:"moderate" },
+  { ticker:"005420.KS", name:"코스모화학",          risk:"moderate" },
+  { ticker:"014680.KS", name:"한솔케미칼",          risk:"moderate" },
+  { ticker:"298050.KS", name:"효성첨단소재",        risk:"moderate" },
+  { ticker:"298020.KS", name:"효성TNC",             risk:"moderate" },
+  { ticker:"282330.KS", name:"BGF리테일",           risk:"moderate" },
+  { ticker:"021240.KS", name:"코웨이",              risk:"moderate" },
+  { ticker:"009240.KS", name:"한샘",               risk:"moderate" },
+  { ticker:"204320.KS", name:"HL만도",              risk:"moderate" },
+  { ticker:"161390.KS", name:"한국타이어앤테크놀로지", risk:"moderate" },
+  { ticker:"018880.KS", name:"한온시스템",          risk:"moderate" },
+
+  // ── 위험 (40개) ──────────────────────────────────────────────────────────
+  { ticker:"373220.KS", name:"LG에너지솔루션",      risk:"risky" },
+  { ticker:"006400.KS", name:"삼성SDI",             risk:"risky" },
+  { ticker:"402340.KS", name:"SK스퀘어",            risk:"risky" },
+  { ticker:"361610.KS", name:"SK아이이테크놀로지",  risk:"risky" },
+  { ticker:"285130.KS", name:"SK케미칼",            risk:"risky" },
+  { ticker:"011790.KS", name:"SKC",                risk:"risky" },
+  { ticker:"267260.KS", name:"HD현대일렉트릭",      risk:"risky" },
+  { ticker:"071970.KS", name:"HD현대마린엔진",      risk:"risky" },
+  { ticker:"443060.KS", name:"HD현대마린솔루션",    risk:"risky" },
+  { ticker:"298040.KS", name:"효성중공업",          risk:"risky" },
+  { ticker:"082740.KS", name:"한화엔진",            risk:"risky" },
+  { ticker:"017800.KS", name:"현대엘리베이터",      risk:"risky" },
+  { ticker:"064350.KS", name:"현대로템",            risk:"risky" },
+  { ticker:"011210.KS", name:"현대위아",            risk:"risky" },
+  { ticker:"007340.KS", name:"DN오토모티브",        risk:"risky" },
+  { ticker:"042700.KS", name:"한미반도체",          risk:"risky" },
+  { ticker:"007660.KS", name:"이수페타시스",        risk:"risky" },
+  { ticker:"457190.KS", name:"이수스페셜티케미컬",  risk:"risky" },
+  { ticker:"112610.KS", name:"씨에스윈드",          risk:"risky" },
+  { ticker:"066970.KS", name:"엘앤에프",            risk:"risky" },
+  { ticker:"450080.KS", name:"에코프로머티리얼즈",  risk:"risky" },
+  { ticker:"103140.KS", name:"풍산",               risk:"risky" },
+  { ticker:"001430.KS", name:"세아베스틸지주",      risk:"risky" },
+  { ticker:"003030.KS", name:"세아홀딩스",          risk:"risky" },
+  { ticker:"000670.KS", name:"영풍",               risk:"risky" },
+  { ticker:"010060.KS", name:"OCI홀딩스",           risk:"risky" },
+  { ticker:"006650.KS", name:"한국화학",            risk:"risky" },
+  { ticker:"093370.KS", name:"후성",               risk:"risky" },
+  { ticker:"268280.KS", name:"미원특수화학",        risk:"risky" },
+  { ticker:"002840.KS", name:"미원상사",            risk:"risky" },
+  { ticker:"004000.KS", name:"롯데정밀화학",        risk:"risky" },
+  { ticker:"011170.KS", name:"롯데케미칼",          risk:"risky" },
+  { ticker:"073240.KS", name:"금호타이어",          risk:"risky" },
+  { ticker:"180640.KS", name:"한진칼",              risk:"risky" },
+  { ticker:"002790.KS", name:"아모레퍼시픽그룹",    risk:"risky" },
+  { ticker:"278470.KS", name:"APR",                risk:"risky" },
+  { ticker:"383220.KS", name:"F&F",                risk:"risky" },
+  { ticker:"001800.KS", name:"오리온홀딩스",        risk:"risky" },
+  { ticker:"004990.KS", name:"롯데지주",            risk:"risky" },
+  { ticker:"139130.KS", name:"DGB금융지주",         risk:"risky" },
+
+  // ── 매우 위험 (40개) ─────────────────────────────────────────────────────
+  { ticker:"454910.KS", name:"두산로보틱스",        risk:"very_risky" },
+  { ticker:"326030.KS", name:"SK바이오팜",          risk:"very_risky" },
+  { ticker:"302440.KS", name:"SK바이오사이언스",    risk:"very_risky" },
+  { ticker:"137310.KS", name:"SD바이오센서",        risk:"very_risky" },
+  { ticker:"009420.KS", name:"한올바이오파마",      risk:"very_risky" },
+  { ticker:"003090.KS", name:"대웅",               risk:"very_risky" },
+  { ticker:"008930.KS", name:"한미사이언스",        risk:"very_risky" },
+  { ticker:"005250.KS", name:"녹십자홀딩스",        risk:"very_risky" },
+  { ticker:"192080.KS", name:"더블유게임즈",        risk:"very_risky" },
+  { ticker:"036570.KS", name:"엔씨소프트",          risk:"very_risky" },
+  { ticker:"251270.KS", name:"넷마블",              risk:"very_risky" },
+  { ticker:"377300.KS", name:"카카오페이",          risk:"very_risky" },
+  { ticker:"323410.KS", name:"카카오뱅크",          risk:"very_risky" },
+  { ticker:"030000.KS", name:"제일기획",            risk:"very_risky" },
+  { ticker:"000210.KS", name:"DL",                 risk:"very_risky" },
+  { ticker:"300720.KS", name:"한일시멘트",          risk:"very_risky" },
+  { ticker:"002380.KS", name:"KCC",                risk:"very_risky" },
+  { ticker:"052690.KS", name:"한전KPS",             risk:"very_risky" },
+  { ticker:"051600.KS", name:"한전기술",            risk:"very_risky" },
+  { ticker:"081660.KS", name:"미스토",              risk:"very_risky" },
+  { ticker:"017960.KS", name:"한국카본",            risk:"very_risky" },
+  { ticker:"014820.KS", name:"동원시스템즈",        risk:"very_risky" },
+  { ticker:"006040.KS", name:"동원산업",            risk:"very_risky" },
+  { ticker:"001040.KS", name:"CJ",                 risk:"very_risky" },
+  { ticker:"004490.KS", name:"세방전지",            risk:"very_risky" },
+  { ticker:"069260.KS", name:"TKG휴켐스",           risk:"very_risky" },
+  { ticker:"008730.KS", name:"율촌화학",            risk:"very_risky" },
+  { ticker:"001440.KS", name:"태한케이블",          risk:"very_risky" },
+  { ticker:"003240.KS", name:"태광산업",            risk:"very_risky" },
+  { ticker:"111770.KS", name:"영원무역",            risk:"very_risky" },
+  { ticker:"009970.KS", name:"영원무역홀딩스",      risk:"very_risky" },
+  { ticker:"005850.KS", name:"SL",                 risk:"very_risky" },
+  { ticker:"000240.KS", name:"한국앤컴퍼니",        risk:"very_risky" },
+  { ticker:"012750.KS", name:"S-1",                risk:"very_risky" },
+  { ticker:"062040.KS", name:"사닐전기",            risk:"very_risky" },
+  { ticker:"010950.KS", name:"S-Oil",              risk:"very_risky" },
+  { ticker:"016360.KS", name:"삼성증권",            risk:"very_risky" },
+  { ticker:"029780.KS", name:"삼성카드",            risk:"very_risky" },
+  { ticker:"004800.KS", name:"효성",               risk:"very_risky" },
+  { ticker:"000880.KS", name:"한화",               risk:"very_risky" },
+];
+
+// ─── 헬퍼 ────────────────────────────────────────────────────────────────────
+const YF_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Referer": "https://finance.yahoo.com/",
+};
+
+async function fetchWithTimeout(url, opts = {}, ms = 9000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function ema(arr, period) {
+  if (!arr || arr.length < period) return arr?.[arr.length - 1] ?? 0;
+  const k = 2 / (period + 1);
+  let val = arr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < arr.length; i++) val = arr[i] * k + val * (1 - k);
+  return val;
+}
+
+function rsi(closes, period = 14) {
+  if (!closes || closes.length < period + 1) return 50;
+  const gains = [], losses = [];
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gains.push(d); else losses.push(Math.abs(d));
+  }
+  const ag = gains.length ? gains.reduce((a, b) => a + b, 0) / period : 0;
+  const al = losses.length ? losses.reduce((a, b) => a + b, 0) / period : 0;
+  return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+}
+
+// ─── 국내 정규장 여부 판단 ────────────────────────────────────────────────────
+// KST 09:00~15:30 = 정규장
+function isRegularSession() {
+  const now = new Date();
+  const kstStr = now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
+  const kst = new Date(kstStr);
+  const h = kst.getHours(), m = kst.getMinutes();
+  const dow = kst.getDay(); // 0=일, 6=토
+  if (dow === 0 || dow === 6) return false;
+  const minOfDay = h * 60 + m;
+  return minOfDay >= 540 && minOfDay < 930; // 09:00(540) ~ 15:30(930)
+}
+
+// ─── 5분봉 당일 intraday 데이터 fetch ─────────────────────────────────────────
+async function fetchIntradayData(ticker) {
+  try {
+    // 1분봉으로 프리마켓/에프터마켓 포함 실시간 가격 확보
+    const url1m = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d&includePrePost=true`;
+    const resp1m = await fetchWithTimeout(url1m, { headers: YF_HEADERS }, 8000);
+    let realtimePrice = null;
+    if (resp1m.ok) {
+      const data1m = await resp1m.json();
+      const result1m = data1m?.chart?.result?.[0];
+      if (result1m) {
+        const closes1m = (result1m.indicators?.quote?.[0]?.close ?? []).filter(v => v != null);
+        if (closes1m.length > 0) realtimePrice = closes1m[closes1m.length - 1];
+      }
+    }
+
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=1d`;
+    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 8000);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+
+    const iq = result.indicators?.quote?.[0] ?? {};
+    const rawCloses = iq.close  ?? [];
+    const rawVols   = iq.volume ?? [];
+    const rawHighs  = iq.high   ?? [];
+    const rawLows   = iq.low    ?? [];
+
+    if (!rawVols.length) return null;
+
+    // (1) 최대 거래량 분봉 종가
+    let maxVolIdx = 0, maxVol = 0;
+    for (let i = 0; i < rawVols.length; i++) {
+      const v = rawVols[i] ?? 0;
+      if (v > maxVol) { maxVol = v; maxVolIdx = i; }
+    }
+    const maxVolBarClose = typeof rawCloses[maxVolIdx] === 'number' ? rawCloses[maxVolIdx] : null;
+
+    // (2) 5분봉 누적 순매수 (상승분봉 거래량 - 하락분봉 거래량)
+    let buyVol = 0, sellVol = 0;
+    for (let i = 1; i < rawCloses.length; i++) {
+      const c = rawCloses[i], pc = rawCloses[i-1], v = rawVols[i] ?? 0;
+      if (c != null && pc != null) {
+        if (c > pc) buyVol += v;
+        else if (c < pc) sellVol += v;
+      }
+    }
+    const intradayNetBuy = buyVol - sellVol;
+
+    // (3) 최근 10분(2개 바) vs 60분(12개 바) 평균 변동폭
+    function avgRange(h, l, n) {
+      let sum = 0, cnt = 0;
+      for (let i = Math.max(0, h.length - n); i < h.length; i++) {
+        if (h[i] != null && l[i] != null) { sum += h[i] - l[i]; cnt++; }
+      }
+      return cnt > 0 ? sum / cnt : 0;
+    }
+    const range10m = avgRange(rawHighs, rawLows, 2);
+    const range60m = avgRange(rawHighs, rawLows, 12);
+
+    // (4) 체결 강도 (Volume Power) = (buyVol / sellVol) * 100
+    const volumePower = sellVol > 0 ? (buyVol / sellVol) * 100 : (buyVol > 0 ? 200 : 100);
+
+    return { maxVolBarClose, intradayNetBuy, range10m, range60m, volumePower, realtimePrice };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Yahoo Finance v8 chart API (일봉 90일) ───────────────────────────────────
+async function fetchQuote(ticker) {
+  try {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=90d&includePrePost=true`;
+    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 9000);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+
+    const meta = result.meta;
+    const q = result.indicators?.quote?.[0] ?? {};
+    const closes  = (q.close  ?? []).filter(v => v != null);
+    const volumes = (q.volume ?? []).filter(v => v != null);
+    const opens   = (q.open   ?? []).filter(v => v != null);
+    const highs   = (q.high   ?? []).filter(v => v != null);
+    const lows    = (q.low    ?? []).filter(v => v != null);
+
+    // 실시간 가격: postMarket > preMarket > regularMarket > 마지막 종가
+    const postMarketPrice = meta.postMarketPrice ?? null;
+    const preMarketPrice  = meta.preMarketPrice  ?? null;
+    const realtimePrice   = postMarketPrice ?? preMarketPrice ?? meta.regularMarketPrice ?? closes[closes.length - 1] ?? 0;
+    const price = realtimePrice;
+
+    // 전일 정규장 종가 (closes[-2])
+    const prevClose = closes.length >= 2 ? closes[closes.length - 2] : (meta.chartPreviousClose ?? price);
+    const chgPct    = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0;
+    const volume    = meta.regularMarketVolume ?? volumes[volumes.length - 1] ?? 0;
+    const avgVol    = volumes.length > 5
+      ? volumes.slice(-20, -1).reduce((a, b) => a + b, 0) / Math.min(19, volumes.length - 1)
+      : volume;
+
+    const ma5  = closes.length >= 5  ? closes.slice(-5).reduce((a,b)=>a+b,0)/5   : price;
+    const ma10 = closes.length >= 10 ? closes.slice(-10).reduce((a,b)=>a+b,0)/10 : price;
+    const ma20 = closes.length >= 20 ? closes.slice(-20).reduce((a,b)=>a+b,0)/20 : price;
+
+    const rsiVal = rsi(closes);
+    const ema12Val = ema(closes, 12);
+    const ema26Val = ema(closes, 26);
+    const macdLine = ema12Val - ema26Val;
+
+    let bbUpper = price * 1.02, bbLower = price * 0.98, bbMiddle = price;
+    if (closes.length >= 20) {
+      const last20 = closes.slice(-20);
+      bbMiddle = last20.reduce((a,b)=>a+b,0)/20;
+      const variance = last20.reduce((a,b)=>a+Math.pow(b-bbMiddle,2),0)/20;
+      const std = Math.sqrt(variance);
+      bbUpper = bbMiddle + 2 * std;
+      bbLower = bbMiddle - 2 * std;
+    }
+
+    let consecutiveUp = 0, consecutiveDown = 0;
+    for (let i = closes.length - 1; i > 0 && i >= closes.length - 5; i--) {
+      if (closes[i] > closes[i-1]) consecutiveUp++;
+      else break;
+    }
+    for (let i = closes.length - 1; i > 0 && i >= closes.length - 5; i--) {
+      if (closes[i] < closes[i-1]) consecutiveDown++;
+      else break;
+    }
+
+    // VWAP 근사: 최근 20일 일봉 OHLCV 기반
+    let vwap = price;
+    if (closes.length >= 5 && highs.length >= 5 && lows.length >= 5 && volumes.length >= 5) {
+      const n = Math.min(20, closes.length, highs.length, lows.length, volumes.length);
+      let cumPV = 0, cumV = 0;
+      for (let i = closes.length - n; i < closes.length; i++) {
+        const typicalPrice = (highs[i] + lows[i] + closes[i]) / 3;
+        const vol = volumes[i] || 0;
+        cumPV += typicalPrice * vol;
+        cumV  += vol;
+      }
+      if (cumV > 0) vwap = cumPV / cumV;
+    }
+
+    // 변동성 (단기5일/장기20일)
+    function stdDev(arr) {
+      if (arr.length < 2) return 0;
+      const mean = arr.reduce((a,b)=>a+b,0)/arr.length;
+      return Math.sqrt(arr.reduce((a,b)=>a+Math.pow(b-mean,2),0)/arr.length);
+    }
+    const returns = closes.slice(1).map((c,i)=> closes[i]>0 ? (c-closes[i])/closes[i] : 0);
+    const vol5  = stdDev(returns.slice(-5));
+    const vol20 = stdDev(returns.slice(-20));
+
+    // MFI(14)
+    let mfi14 = 50;
+    if (closes.length >= 15 && highs.length >= 15 && lows.length >= 15 && volumes.length >= 15) {
+      const typical = closes.map((c,i)=>(highs[i]+lows[i]+c)/3);
+      let pos=0, neg=0;
+      for (let i=typical.length-14; i<typical.length; i++) {
+        const mf = typical[i]*(volumes[i]||0);
+        if (typical[i]>typical[i-1]) pos+=mf; else neg+=mf;
+      }
+      mfi14 = neg===0 ? 100 : 100-100/(1+pos/neg);
+    }
+
+    return {
+      ticker, price, prevClose, chgPct, volume,
+      avgVolume: avgVol,
+      open:    meta.regularMarketOpen    ?? opens[opens.length-1]   ?? price,
+      dayHigh: meta.regularMarketDayHigh ?? highs[highs.length-1]   ?? price,
+      dayLow:  meta.regularMarketDayLow  ?? lows[lows.length-1]     ?? price,
+      high52w: meta.fiftyTwoWeekHigh     ?? Math.max(...closes),
+      low52w:  meta.fiftyTwoWeekLow      ?? Math.min(...closes),
+      mktCap:  meta.marketCap            ?? 0,
+      ma5, ma10, ma20, rsi: rsiVal, macdLine,
+      bbUpper, bbLower, bbMiddle,
+      consecutiveUp, consecutiveDown, closes, vwap,
+      vol5, vol20, mfi14,
+      highs, lows, volumes,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Yahoo Finance 뉴스 API ───────────────────────────────────────────────────
+async function fetchNews(ticker) {
+  try {
+    // 코스피 종목은 티커에서 .KS 제거하여 검색
+    const searchTicker = ticker.replace('.KS', '').replace('.KQ', '');
+    const now = Math.floor(Date.now() / 1000);
+    const cutoff24 = now - 86400;
+    const cutoff72 = now - 259200;
+    const cutoff7d = now - 604800;
+
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=30&quotesCount=0`;
+    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 8000);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const allNews = data?.news ?? [];
+
+    // relatedTickers 필터: .KS 포함 또는 숫자코드 포함
+    const strictFilter = (n) => {
+      const related = n.relatedTickers ?? [];
+      return related.includes(ticker) || related.includes(searchTicker);
+    };
+
+    let filtered = allNews.filter(n => strictFilter(n) && (n.providerPublishTime ?? 0) > cutoff24);
+    if (filtered.length < 5) filtered = allNews.filter(n => strictFilter(n) && (n.providerPublishTime ?? 0) > cutoff72);
+    if (filtered.length < 5) filtered = allNews.filter(n => strictFilter(n) && (n.providerPublishTime ?? 0) > cutoff7d);
+    if (filtered.length === 0) filtered = allNews.filter(n => strictFilter(n));
+
+    return filtered.slice(0, 10).map(n => {
+      const directLink = n.link ?? "";
+      const fallbackLink = `https://finance.yahoo.com/quote/${ticker}/news/`;
+      return {
+        title: n.title ?? "",
+        url: directLink || fallbackLink,
+        publishTime: n.providerPublishTime ?? 0,
+        relatedTickers: n.relatedTickers ?? [],
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+// ─── 뉴스 긍정/부정 판별 키워드 ──────────────────────────────────────────────
+const BULLISH_KEYWORDS = [
+  // 실적 호재
+  "어닝서프라이즈", "실적 서프라이즈", "어닝 서프라이즈", "실적 상회", "최대 실적", "사상 최대",
+  "영업이익 증가", "매출 증가", "순이익 증가", "흑자전환", "실적 개선", "실적 호조",
+  "목표주가 상향", "투자의견 상향", "매수 추천", "신규 편입",
+  "신고가", "52주 신고가", "상장 이후 최고",
+  "급등", "상한가", "강세", "랠리", "반등",
+  "수주", "계약 체결", "대규모 계약", "수주 잔고",
+  "인수", "합병", "파트너십", "전략적 제휴",
+  "자사주 매입", "배당 증가", "특별배당",
+  "FDA 승인", "임상 성공", "허가 획득",
+  "AI", "반도체", "전기차", "2차전지",
+  "수출 증가", "해외 진출", "신시장 개척",
+  // 영어 키워드
+  "beat", "surge", "rally", "upgrade", "buy", "outperform", "record", "high",
+  "acquisition", "partnership", "approval", "dividend", "buyback",
+];
+
+const BEARISH_KEYWORDS = [
+  "실적 쇼크", "어닝 쇼크", "실적 부진", "실적 하회", "영업손실", "적자전환", "순손실",
+  "목표주가 하향", "투자의견 하향", "매도 추천",
+  "급락", "하한가", "약세", "매도세",
+  "소송", "과징금", "제재", "조사", "검찰",
+  "파산", "워크아웃", "구조조정", "감원",
+  "수주 취소", "계약 해지",
+  "리콜", "결함", "안전 문제",
+  "miss", "plunge", "downgrade", "sell", "underperform", "loss", "decline",
+  "lawsuit", "investigation", "fine", "layoff", "bankruptcy",
+];
+
+function isArticleBullish(title) {
+  if (!title) return false;
+  const t = title.toLowerCase();
+  const bullish  = BULLISH_KEYWORDS.some(w => t.includes(w.toLowerCase()));
+  const bearish  = BEARISH_KEYWORDS.some(w => t.includes(w.toLowerCase()));
+  if (bullish && !bearish) return true;
+  if (bearish && !bullish) return false;
+  return bullish;
+}
+
+// ─── 뉴스 점수 계산 ───────────────────────────────────────────────────────────
+function calcNewsScore(newsItems) {
+  const slots = [];
+  for (let i = 0; i < 10; i++) {
+    if (i < newsItems.length) {
+      const item = newsItems[i];
+      const title = typeof item === "string" ? item : (item.title ?? "");
+      const bullish = isArticleBullish(title);
+      const url = (typeof item === "object" && item.url) ? item.url : `https://finance.yahoo.com/`;
+      slots.push({ title, url, pts: bullish ? 10 : 0, bullish });
+    } else {
+      slots.push({ title: "관련 기사 없음", pts: 0, bullish: false });
+    }
+  }
+  const rawScore = slots.reduce((sum, s) => sum + s.pts, 0);
+  const score = Math.round(rawScore * 0.15); // 15% 반영
+  return { score, rawScore, slots };
+}
+
+// ─── 기관 매수 체크리스트 (10개 × 10점, 최대 100점 → 45% 반영 = 45점) ─────────
+const INST_CHECKLIST = [
+  {
+    id: "I1",
+    label: "종목 RS > 지수 RS × 1.05 (코스피200 대비 상대 강도 우위)",
+    desc: "3개월 종목 수익률이 코스피200 수익률의 1.05배 초과 — 기관 선호 모멘텀 종목",
+    check: (q) => typeof q.rsVsIndex === 'number' && q.rsVsIndex > q.indexReturn * 0.05,
+  },
+  {
+    id: "I2",
+    label: "현재가 > VWAP AND 평균 체결 규모 > 20일 평균 × 1.5",
+    desc: "VWAP 상단 유지 + 대량 체결 — 기관 매집 동시 확인",
+    check: (q) => q.price > q.vwap && (q.avgVolume > 0 ? q.volume / q.avgVolume : 1) >= 1.5,
+  },
+  {
+    id: "I3",
+    label: "5분봉 누적 순매수 우위 (상승분봉 거래량 > 하락분봉)",
+    desc: "당일 5분봉 기준 상승 분봉 거래량 합 > 하락 분봉 거래량 합 — 기관 순매수 Proxy",
+    check: (q) => typeof q.intradayNetBuy === 'number' && q.intradayNetBuy > 0,
+  },
+  {
+    id: "I4",
+    label: "최근 10분 변동폭 ≤ 60분 평균 × 0.7 (변동성 수축)",
+    desc: "단기 변동폭 축소 — 기관 조용한 매집 구간 신호",
+    check: (q) => typeof q.range10m === 'number' && typeof q.range60m === 'number'
+      && q.range60m > 0 && q.range10m <= q.range60m * 0.7,
+  },
+  {
+    id: "I5",
+    label: "당일 체결 강도 ≥ 120% (Volume Power)",
+    desc: "(매수 체결량 / 매도 체결량) × 100 ≥ 120 — 매수 우위 확인",
+    check: (q) => typeof q.volumePower === 'number' && q.volumePower >= 120,
+  },
+  {
+    id: "I6",
+    label: "현재가 > 당일 최대 거래 발생 가격대",
+    desc: "5분봉 최대 거래량 분봉 종가 돌파 — 핵심 매물대 상단 돌파 확인",
+    check: (q) => typeof q.maxVolBarClose === 'number' && q.price > q.maxVolBarClose,
+  },
+  {
+    id: "I7",
+    label: "MFI(14) 60~80 (자금유입 강세 구간)",
+    desc: "Money Flow Index 60~80 — 과열 없는 자금 유입 확인",
+    check: (q) => typeof q.mfi14 === 'number' && q.mfi14 >= 60 && q.mfi14 <= 80,
+  },
+  {
+    id: "I8",
+    label: "단기 변동성(5일) / 장기 변동성(20일) < 0.8",
+    desc: "변동성 수축 — 안정적 상승 구간 진입 신호",
+    check: (q) => typeof q.vol5 === 'number' && typeof q.vol20 === 'number'
+      && q.vol20 > 0 && q.vol5 / q.vol20 < 0.8,
+  },
+  {
+    id: "I9",
+    label: "현재가 > 시가 AND 현재가 ≥ 전일 종가 × 1.01",
+    desc: "갭업 또는 강한 당일 상승 — 기관 매수세 확인",
+    check: (q) => q.price > q.open && q.price >= q.prevClose * 1.01,
+  },
+  {
+    id: "I10",
+    label: "최근 3~5거래일 종가 순보유 비중 상승 (Proxy)",
+    desc: "최근 3~5일 종가 연속 상승 추세 — 기관 지분 축적 간접 신호",
+    check: (q) => {
+      if (!q.closes || q.closes.length < 5) return false;
+      const last5 = q.closes.slice(-5);
+      let upDays = 0;
+      for (let i=1; i<last5.length; i++) if (last5[i]>last5[i-1]) upDays++;
+      return upDays >= 3;
+    },
+  },
+];
+
+function calcInstitutionalScore(q) {
+  let rawScore = 0;
+  const checklist = INST_CHECKLIST.map(item => {
+    const passed = item.check(q);
+    if (passed) rawScore += 10;
+    return { id: item.id, label: item.label, desc: item.desc, pts: passed ? 10 : 0, passed };
+  });
+  const score = Math.round(rawScore * 0.45); // 45% 반영
+  return { score, rawScore, checklist };
+}
+
+// ─── 차트 분석 체크리스트 (10개 × 10점, 최대 100점 → 40% 반영 = 40점) ───────
+const CHART_CHECKLIST = [
+  {
+    id: "T1",
+    label: "BB 폭 30일 최저치 근접 (스퀘즈 진입)",
+    desc: "볼린저 밴드 폭이 30일 최소치 ×1.2 이내 — 변동성 수축 후 대형 이동 진입 신호",
+    check: (q) => {
+      if (!q.closes || !q.highs || !q.lows || q.closes.length < 20) return false;
+      const widths = [];
+      for (let i = 20; i <= q.closes.length; i++) {
+        const w = q.closes.slice(i-20, i);
+        const mid = w.reduce((a,b)=>a+b,0)/20;
+        const std = Math.sqrt(w.reduce((a,b)=>a+Math.pow(b-mid,2),0)/20);
+        widths.push(4*std);
+      }
+      const minW30 = Math.min(...widths.slice(-30));
+      return widths[widths.length-1] <= minW30 * 1.2;
+    },
+  },
+  {
+    id: "T2",
+    label: "5일 이평선 기울기 하락 후 당일 반등",
+    desc: "3일 기울기 음수 + 당일 기울기 양수 — 단기 눌림목 반등 신호",
+    check: (q) => {
+      if (!q.closes || q.closes.length < 8) return false;
+      const c = q.closes;
+      const ma5 = (i) => c.slice(i-4, i+1).reduce((a,b)=>a+b,0)/5;
+      const slope3 = (ma5(c.length-1) - ma5(c.length-4)) / 3;
+      const slope1 = ma5(c.length-1) - ma5(c.length-2);
+      return slope3 < 0 && slope1 > 0;
+    },
+  },
+  {
+    id: "T3",
+    label: "거래량 급감 (눌림목 확인)",
+    desc: "당일 거래량 ≤ 5일 평균 ×0.8 — 매도 없는 조용한 눌림목 확인",
+    check: (q) => {
+      if (!q.volumes || q.volumes.length < 6) return false;
+      const avg5 = q.volumes.slice(-6, -1).reduce((a,b)=>a+b,0)/5;
+      return q.volume <= avg5 * 0.8;
+    },
+  },
+  {
+    id: "T4",
+    label: "RSI 45~60 (과열 제외 강세 진입)",
+    desc: "RSI 45~60 구간 — 과열 없이 상승 모멘텀 유지 중",
+    check: (q) => q.rsi >= 45 && q.rsi <= 60,
+  },
+  {
+    id: "T5",
+    label: "20일선 터치 후 지지 반등",
+    desc: "저가 ≤ MA20×1.005 AND 종가 > MA20 — 중기 지지선 터치 후 반등 확인",
+    check: (q) => q.dayLow <= q.ma20 * 1.005 && q.price > q.ma20,
+  },
+  {
+    id: "T6",
+    label: "MACD 히스토그램 음수권 상승",
+    desc: "Hist[t-2] < Hist[t-1] < Hist[t] < 0 — 하락 속도 지속 감소, 바닥 접근 신호",
+    check: (q) => {
+      if (!q.closes || q.closes.length < 35) return false;
+      const c = q.closes;
+      const k12 = 2/13, k26 = 2/27, k9 = 2/10;
+      let e12 = c.slice(0,12).reduce((a,b)=>a+b,0)/12;
+      let e26 = c.slice(0,26).reduce((a,b)=>a+b,0)/26;
+      for (let i=12; i<26; i++) e12 = c[i]*k12 + e12*(1-k12);
+      let sig = e12 - e26;
+      const hists = [];
+      for (let i=26; i<c.length; i++) {
+        e12 = c[i]*k12 + e12*(1-k12);
+        e26 = c[i]*k26 + e26*(1-k26);
+        const ml = e12 - e26;
+        sig = ml*k9 + sig*(1-k9);
+        hists.push(ml - sig);
+      }
+      if (hists.length < 3) return false;
+      const [h2, h1, h0] = hists.slice(-3);
+      return h2 < h1 && h1 < h0 && h0 < 0;
+    },
+  },
+  {
+    id: "T7",
+    label: "망치형/도지형 캔들 (하방 경직성)",
+    desc: "(종가-저가)/(고가-저가) ≥ 0.7 — 하단 거절로 매수세 우위 확인",
+    check: (q) => {
+      const range = q.dayHigh - q.dayLow;
+      return range > 0 ? (q.price - q.dayLow) / range >= 0.7 : false;
+    },
+  },
+  {
+    id: "T8",
+    label: "당일 최대 거래량 분봉 종가 돌파",
+    desc: "종가 > 당일 5분봉 중 최대거래량 분봉 종가 — 기관 대량 체결 구간 돌파 확인",
+    check: (q) => typeof q.maxVolBarClose === 'number' ? q.price > q.maxVolBarClose : false,
+  },
+  {
+    id: "T9",
+    label: "52주 고점 -30%~-5% 구간",
+    desc: "52주 고점 대비 70~95% 구간 — 대형 상승 전 눌림목 지점",
+    check: (q) => q.high52w > 0 && q.price >= q.high52w * 0.70 && q.price <= q.high52w * 0.95,
+  },
+  {
+    id: "T10",
+    label: "VWAP 상향 돌파 초입 (VWAP×1.002~1.005)",
+    desc: "VWAP×1.002 ≤ 종가 ≤ VWAP×1.005 — 기관 평균단가 상향 돌파 직후 진입 구간",
+    check: (q) => q.vwap > 0 && q.price >= q.vwap * 1.002 && q.price <= q.vwap * 1.005,
+  },
+];
+
+function calcChartScore(q) {
+  let rawScore = 0;
+  const checklist = CHART_CHECKLIST.map(item => {
+    const passed = item.check(q);
+    if (passed) rawScore += 10;
+    return { id: item.id, label: item.label, desc: item.desc, pts: passed ? 10 : 0, passed };
+  });
+  const score = Math.round(rawScore * 0.40); // 40% 반영
+  return { score, rawScore, checklist };
+}
+
+// ─── 코스피200 벤치마크 3개월 수익률 계산 ────────────────────────────────────
+async function fetchIndexReturn() {
+  try {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/%5EKS200?interval=1d&range=90d`;
+    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 9000);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+    const closes = (result.indicators?.quote?.[0]?.close ?? []).filter(v => v != null);
+    if (closes.length < 2) return null;
+    const first = closes[0], last = closes[closes.length - 1];
+    return first > 0 ? (last - first) / first : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── 메인 API 핸들러 ─────────────────────────────────────────────────────────
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+
+  if (req.method === "OPTIONS") return res.status(200).end();
+
+  try {
+    const BATCH = 8;
+    const results = [];
+
+    // 코스피200 3개월 수익률 (RS 비교용) — 한 번만 fetch
+    const indexReturn = await fetchIndexReturn();
+
+    for (let i = 0; i < STOCKS.length; i += BATCH) {
+      const batch = STOCKS.slice(i, i + BATCH);
+      const batchRes = await Promise.allSettled(
+        batch.map(async (stock) => {
+          const [quoteRes, newsRes, intradayRes] = await Promise.allSettled([
+            fetchQuote(stock.ticker),
+            fetchNews(stock.ticker),
+            fetchIntradayData(stock.ticker),
+          ]);
+
+          const q = quoteRes.status === "fulfilled" ? quoteRes.value : null;
+          const newsItems = newsRes.status === "fulfilled" ? newsRes.value : [];
+          const intraday = intradayRes.status === "fulfilled" ? intradayRes.value : null;
+
+          if (!q || q.price === 0) return null;
+
+          // 5분봉 intraday 데이터 주입
+          if (intraday) {
+            if (typeof intraday.maxVolBarClose === 'number') q.maxVolBarClose = intraday.maxVolBarClose;
+            if (typeof intraday.intradayNetBuy === 'number')  q.intradayNetBuy = intraday.intradayNetBuy;
+            if (typeof intraday.range10m === 'number')        q.range10m = intraday.range10m;
+            if (typeof intraday.range60m === 'number')        q.range60m = intraday.range60m;
+            if (typeof intraday.volumePower === 'number')     q.volumePower = intraday.volumePower;
+            // 1분봉 마지막 종가를 실시간 가격으로 덮어씀
+            if (typeof intraday.realtimePrice === 'number' && intraday.realtimePrice > 0) {
+              q.price = intraday.realtimePrice;
+            }
+          }
+
+          // RS vs 코스피200: 종목 3개월 수익률 계산 + indexReturn 주입
+          q.indexReturn = indexReturn ?? 0;
+          if (q.closes && q.closes.length >= 2) {
+            const first = q.closes[0];
+            const last  = q.closes[q.closes.length - 1];
+            const stockReturn = first > 0 ? (last - first) / first : 0;
+            q.rsVsIndex = indexReturn != null ? stockReturn - indexReturn : stockReturn;
+          } else {
+            q.rsVsIndex = 0;
+          }
+
+          const inst  = calcInstitutionalScore(q);
+          const chart = calcChartScore(q);
+          const news  = calcNewsScore(newsItems);
+
+          const total = inst.score + chart.score + news.score;
+
+          return {
+            ticker:    stock.ticker,
+            name:      stock.name,
+            price:     Math.round(q.price),          // 원화는 정수
+            prevClose: Math.round(q.prevClose),
+            chgPct:    Math.round(q.chgPct * 100) / 100,
+            riskLevel: stock.risk,
+            score:     total,
+            breakdown: {
+              institutional:    inst.score,
+              institutionalRaw: inst.rawScore,
+              chart:            chart.score,
+              chartRaw:         chart.rawScore,
+              news:             news.score,
+              newsRaw:          news.rawScore,
+            },
+            instChecklist:  inst.checklist,
+            chartChecklist: chart.checklist,
+            newsSlots:      news.slots,
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
+
+      for (const r of batchRes) {
+        if (r.status === "fulfilled" && r.value) results.push(r.value);
+      }
+    }
+
+    results.sort((a, b) => b.score - a.score);
+
+    const grouped = {
+      all:        results.slice(0, 5),
+      very_safe:  results.filter(r => r.riskLevel === "very_safe").slice(0, 5),
+      safe:       results.filter(r => r.riskLevel === "safe").slice(0, 5),
+      moderate:   results.filter(r => r.riskLevel === "moderate").slice(0, 5),
+      risky:      results.filter(r => r.riskLevel === "risky").slice(0, 5),
+      very_risky: results.filter(r => r.riskLevel === "very_risky").slice(0, 5),
+    };
+
+    return res.status(200).json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      total: results.length,
+      grouped,
+      all: results,
+    });
+
+  } catch (err) {
+    console.error("KR Stock API Error:", err);
+    return res.status(500).json({ ok: false, error: err.message || "Internal server error" });
+  }
+}
