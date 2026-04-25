@@ -531,7 +531,13 @@ async function fetchNews(ticker, stockName = '') {
       // 종목코드 직접 포함
       if (t.includes(code)) return true;
       // 종목명 토큰 중 하나라도 포함 (2글자 이상)
-      return nameTokens.some(token => t.includes(token));
+      if (nameTokens.some(token => t.includes(token))) return true;
+      // 네이버 금융 URL 기반 기사는 이미 해당 종목 기사이므로 통과
+      return false;
+    }
+    // 네이버 금융 URL 기반 기사는 관련성 체크 없이 통과 (종목 코드가 URL에 포함됨)
+    function isNaverStockNews(url) {
+      return url && url.includes(`code=${code}`);
     }
 
     // 1차: 네이버 금융 종목 뉴스 RSS
@@ -579,13 +585,14 @@ async function fetchNews(ticker, stockName = '') {
           const url = `https://finance.naver.com${m[1]}`;
           const rawTitle = m[2].trim();
           const title = rawTitle
+            .replace(/<[^>]+>/g, '')  // HTML 태그 제거
             .replace(/&quot;/g, '"').replace(/&ldquo;/g, '"').replace(/&rdquo;/g, '"')
             .replace(/&lsquo;/g, "'").replace(/&rsquo;/g, "'")
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
             .replace(/&hellip;/g, '…').replace(/&middot;/g, '·').replace(/&harr;/g, '↔')
             .replace(/&nbsp;/g, ' ').replace(/&#[0-9]+;/g, '').replace(/&[a-z]+;/g, '')
             .replace(/\s+/g, ' ').trim();
-          if (title && title.length > 3) allNews.push({ title, url });
+          if (title && title.length > 3) allNews.push({ title, url, fromNaver: true });
         }
       } catch (e) { /* ignore parse errors */ }
     }
@@ -608,7 +615,9 @@ async function fetchNews(ticker, stockName = '') {
     allNews = allNews.filter(n => {
       if (!n.title || seen.has(n.title)) return false;
       seen.add(n.title);
-      return isRelevant(n.title); // 종목 관련 기사만 통과
+      // 네이버 금융 기사는 이미 해당 종목 기사 (URL에 종목코드 포함)
+      if (n.fromNaver || isNaverStockNews(n.url)) return true;
+      return isRelevant(n.title); // 그 외는 관련성 필터 적용
     });
 
     // 결과가 부족하면 구글 뉴스 RSS fallback (한국어 기사만)
@@ -623,7 +632,7 @@ async function fetchNews(ticker, stockName = '') {
           // <title> 태그 추출 (첫 번째는 피드 제목이므로 skip)
           const titleMatches = [...xml.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[([^\]]+)\]\]><\/title>[\s\S]*?<link>([^<]+)<\/link>/gi)];
           for (const tm of titleMatches.slice(0, 10)) {
-            const title = tm[1].trim().replace(/\s+/g, ' ');
+            const title = tm[1].replace(/<[^>]+>/g, '').trim().replace(/\s+/g, ' ');
             const url = tm[2].trim();
             // 한국어 포함 여부 확인 (영어만인 기사 제외)
             const hasKorean = /[가-힣]/.test(title);
