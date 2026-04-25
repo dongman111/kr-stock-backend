@@ -806,24 +806,60 @@ function getArticleScore(title) {
 }
 
 // ─── 뉴스 점수 계산 ───────────────────────────────────────────────────────────
-function calcNewsScore(newsItems) {
-  const slots = [];
-  for (let i = 0; i < 5; i++) {
-    if (i < newsItems.length) {
-      const item = newsItems[i];
-      const title = typeof item === "string" ? item : (item.title ?? "");
-      const { score: pts, sentiment } = getArticleScore(title);
-      const url = (typeof item === "object" && item.url) ? item.url : `https://finance.naver.com/`;
-      // 기사당 20점 (bullish=20, bearish=0, neutral=10)
-      const pts20 = sentiment === 'bullish' ? 20 : sentiment === 'bearish' ? 0 : 10;
-      slots.push({ title, url, pts: pts20, bullish: sentiment === 'bullish', sentiment });
-    } else {
-      slots.push({ title: "관련 기사 없음", pts: 10, bullish: false, sentiment: 'neutral' });
-    }
-  }
-  const rawScore = slots.reduce((sum, s) => sum + s.pts, 0);
-  const score = Math.round(rawScore * 0.10); // 10% 반영 (max 10점)
-  return { score, rawScore, slots };
+function calcDownSignalScore(q) {
+  // 하락 신호 5개 — 각 5점, 총 최대 -20점 (총점에서 차감)
+  const signals = [
+    {
+      id: "D1",
+      label: "프로그램 매도 강도 (비차익 순매도 > 거래량 5%)",
+      desc: "비차익 프로그램 순매도 수량이 당일 전체 거래량의 5% 초과",
+      check: (q) => typeof q.programSellRatio === 'number' && q.programSellRatio >= 0.05,
+    },
+    {
+      id: "D2",
+      label: "호가 잔량 불균형 (매수잔량/매도잔량 ≥ 200% + 계단식 하락)",
+      desc: "총 매수잔량/총 매도잔량 × 100 ≥ 200% 상태에서 주가 계단식 하락",
+      check: (q) => typeof q.bidAskRatio === 'number' && q.bidAskRatio >= 200 && q.price < q.open,
+    },
+    {
+      id: "D3",
+      label: "지수 대비 변동성 괴리 (종목 하락률 ≥ 지수 × 1.5배)",
+      desc: "코스피 하락률 대비 1.5배 이상 하락 (예: 지수 -0.5% / 종목 -0.75% 이하)",
+      check: (q) => {
+        if (typeof q.chgPct !== 'number' || typeof q.indexChgPct !== 'number') return false;
+        if (q.indexChgPct >= 0) return false; // 지수가 하락할 때만
+        return q.chgPct <= q.indexChgPct * 1.5;
+      },
+    },
+    {
+      id: "D4",
+      label: "주요 가격대 거래량 이탈 (시가/전일종가 하향돌파 + 거래량 200%)",
+      desc: "당일 시가 또는 전일 종가 하향 돌파 시 직전 10분 평균 거래량의 200% 이상",
+      check: (q) => {
+        const breakDown = q.price < q.open || q.price < q.prevClose;
+        const volSurge = typeof q.recentVol10m === 'number' && typeof q.avgVol10m === 'number'
+          && q.avgVol10m > 0 && q.recentVol10m >= q.avgVol10m * 2;
+        return breakDown && volSurge;
+      },
+    },
+    {
+      id: "D5",
+      label: "체결 데이터 급락 (체결강도 < 80% + 대량 매도 3회 연속)",
+      desc: "실시간 체결강도 80% 미만 + 평균 체결량의 10배 초과 매도 3회 이상 연속",
+      check: (q) => typeof q.volumePower === 'number' && q.volumePower < 80
+        && typeof q.largeSellCount === 'number' && q.largeSellCount >= 3,
+    },
+  ];
+
+  let deductionRaw = 0;
+  const checklist = signals.map(item => {
+    const passed = item.check(q);
+    if (passed) deductionRaw += 5;
+    return { id: item.id, label: item.label, desc: item.desc, pts: passed ? 5 : 0, passed };
+  });
+  // 최대 -20점 차감 (5개 × 5점 = 25점이지만 cap at 20)
+  const deduction = Math.min(deductionRaw, 20);
+  return { deduction, deductionRaw, checklist };
 }
 
 // ─── 기관 매수 체크리스트 (10개 × 10점, 최대 100점 → 45% 반영 = 45점) ─────────
@@ -1110,12 +1146,10 @@ export default async function handler(req, res) {
             q.rsVsIndex = 0;
           }
 
-          const inst  = calcInstitutionalScore(q);
+            const inst  = calcInstitutionalScore(q);
           const chart = calcChartScore(q);
-          const news  = calcNewsScore(newsItems);
-
-          const total = inst.score + chart.score + news.score;
-
+          const downSignal = calcDownSignalScore(q);
+          const total = Math.max(0, inst.score + chart.score - downSignal.deduction);
           return {
             ticker:    stock.ticker,
             name:      stock.name,
@@ -1129,12 +1163,12 @@ export default async function handler(req, res) {
               institutionalRaw: inst.rawScore,
               chart:            chart.score,
               chartRaw:         chart.rawScore,
-              news:             news.score,
-              newsRaw:          news.rawScore,
+              downSignal:       downSignal.deduction,
+              downSignalRaw:    downSignal.deductionRaw,
             },
-            instChecklist:  inst.checklist,
-            chartChecklist: chart.checklist,
-            newsSlots:      news.slots,
+            instChecklist:       inst.checklist,
+            chartChecklist:      chart.checklist,
+            downSignalChecklist: downSignal.checklist,
             updatedAt: new Date().toISOString(),
           };
         })
