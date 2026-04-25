@@ -548,29 +548,46 @@ async function fetchNews(ticker) {
     let allNews = [];
 
     // 네이버 금융 HTML 파싱 (뉴스 목록 테이블)
+    // 실제 구조: <td class="title"><a href="/item/news_read.naver?..." class="tit">제목</a></td>
     if (naverResp.status === 'fulfilled' && naverResp.value.ok) {
       try {
-        const html = await naverResp.value.text();
-        // 뉴스 제목 추출 (a 태그 title 속성 또는 텍스트)
-        const titleRegex = /class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*href="([^"]*news[^"]*|[^"]*article[^"]*|[^"]*news_read[^"]*)[^"]*"[^>]*(?:title="([^"]*)"|>([^<]*)<)/gi;
+        const buf = await naverResp.value.arrayBuffer();
+        // EUC-KR 디코딩 (네이버 금융은 EUC-KR 인코딩)
+        const decoder = new TextDecoder('euc-kr');
+        const html = decoder.decode(buf);
+        // 패턴 1: class="tit" 링크 (네이버 금융 뉴스 테이블 실제 구조)
+        const titRegex = /<a[^>]+href="(\/item\/news_read\.naver[^"]+)"[^>]*class="tit"[^>]*>([^<]{5,120})<\/a>/gi;
         let m;
-        while ((m = titleRegex.exec(html)) !== null && allNews.length < 10) {
-          const url = m[1] ? (m[1].startsWith('http') ? m[1] : `https://finance.naver.com${m[1]}`) : '';
-          const title = (m[2] || m[3] || '').trim().replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#[0-9]+;/g,'');
+        while ((m = titRegex.exec(html)) !== null && allNews.length < 10) {
+          const url = `https://finance.naver.com${m[1]}`;
+          const title = m[2].trim()
+            .replace(/&ldquo;/g,'"').replace(/&rdquo;/g,'"')
+            .replace(/&lsquo;/g,"'").replace(/&rsquo;/g,"'")
+            .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+            .replace(/&hellip;/g,'…').replace(/&#[0-9]+;/g,'').replace(/\s+/g,' ');
           if (title && title.length > 5) allNews.push({ title, url });
         }
-        // 보조: 더 넓은 패턴으로 뉴스 제목 추출
+        // 패턴 2: class="tit" 순서 반대인 경우
         if (allNews.length < 3) {
-          const altRegex = /<a[^>]+href="([^"]*(?:news_read|article|news)[^"]*?)"[^>]*>([^<]{8,80})<\/a>/gi;
+          const titRegex2 = /<a[^>]+class="tit"[^>]+href="(\/item\/news_read\.naver[^"]+)"[^>]*>([^<]{5,120})<\/a>/gi;
+          while ((m = titRegex2.exec(html)) !== null && allNews.length < 10) {
+            const url = `https://finance.naver.com${m[1]}`;
+            const title = m[2].trim().replace(/&[a-z]+;/g,'').replace(/&#[0-9]+;/g,'').replace(/\s+/g,' ');
+            if (title && title.length > 5) allNews.push({ title, url });
+          }
+        }
+        // 패턴 3: news_read 링크 전체
+        if (allNews.length < 3) {
+          const altRegex = /href="(\/item\/news_read\.naver[^"]+)"[^>]*>([^<]{8,120})<\/a>/gi;
           while ((m = altRegex.exec(html)) !== null && allNews.length < 10) {
-            const url = m[1].startsWith('http') ? m[1] : `https://finance.naver.com${m[1]}`;
-            const title = m[2].trim().replace(/&amp;/g,'&').replace(/\s+/g,' ');
+            const url = `https://finance.naver.com${m[1]}`;
+            const title = m[2].trim().replace(/&[a-z]+;/g,'').replace(/&#[0-9]+;/g,'').replace(/\s+/g,' ');
             if (title && title.length > 5 && !title.includes('더보기') && !title.includes('이전') && !title.includes('다음')) {
               allNews.push({ title, url });
             }
           }
         }
-      } catch { /* ignore parse errors */ }
+      } catch (e) { /* ignore parse errors */ }
     }
 
     // 다음 금융 뉴스 API
