@@ -808,46 +808,49 @@ function getArticleScore(title) {
 // ─── 뉴스 점수 계산 ───────────────────────────────────────────────────────────
 function calcDownSignalScore(q) {
   // 하락 신호 5개 — 각 5점, 총 최대 -20점 (총점에서 차감)
+  // 모두 Yahoo Finance 일봉/5분봉 실제 데이터로 계산
   const signals = [
     {
       id: "D1",
-      label: "프로그램 매도 강도 (비차익 순매도 > 거래량 5%)",
-      desc: "비차익 프로그램 순매도 수량이 당일 전체 거래량의 5% 초과",
-      check: (q) => typeof q.programSellRatio === 'number' && q.programSellRatio >= 0.05,
+      label: "단기 연속 하락 (3일 이상 종가 하락)",
+      desc: "최근 3거래일 이상 종가가 연속 하락 — 매도 압력 지속 신호",
+      check: (q) => typeof q.consecutiveDown === 'number' && q.consecutiveDown >= 3,
     },
     {
       id: "D2",
-      label: "호가 잔량 불균형 (매수잔량/매도잔량 ≥ 200% + 계단식 하락)",
-      desc: "총 매수잔량/총 매도잔량 × 100 ≥ 200% 상태에서 주가 계단식 하락",
-      check: (q) => typeof q.bidAskRatio === 'number' && q.bidAskRatio >= 200 && q.price < q.open,
+      label: "거래량 급감 (당일 거래량 < 20일 평균의 40%)",
+      desc: "당일 거래량이 20일 평균 대비 40% 미만 — 매수세 소멸 신호",
+      check: (q) => {
+        if (typeof q.volume !== 'number' || typeof q.avgVolume !== 'number') return false;
+        if (q.avgVolume <= 0) return false;
+        return q.volume < q.avgVolume * 0.4;
+      },
     },
     {
       id: "D3",
-      label: "지수 대비 변동성 괴리 (종목 하락률 ≥ 지수 × 1.5배)",
-      desc: "코스피 하락률 대비 1.5배 이상 하락 (예: 지수 -0.5% / 종목 -0.75% 이하)",
+      label: "지수 대비 과도 하락 (종목 하락률 ≥ 코스피200 × 1.5배)",
+      desc: "코스피200 하락률 대비 1.5배 이상 하락 — 종목 고유 약세 신호",
       check: (q) => {
         if (typeof q.chgPct !== 'number' || typeof q.indexChgPct !== 'number') return false;
-        if (q.indexChgPct >= 0) return false; // 지수가 하락할 때만
+        if (q.indexChgPct >= 0) return false;
         return q.chgPct <= q.indexChgPct * 1.5;
       },
     },
     {
       id: "D4",
-      label: "주요 가격대 거래량 이탈 (시가/전일종가 하향돌파 + 거래량 200%)",
-      desc: "당일 시가 또는 전일 종가 하향 돌파 시 직전 10분 평균 거래량의 200% 이상",
+      label: "MA20 하향 이탈 (현재가 < MA20 × 0.99)",
+      desc: "현재가가 20일 이동평균선 아래로 1% 이상 이탈 — 중기 추세 붕괴 신호",
       check: (q) => {
-        const breakDown = q.price < q.open || q.price < q.prevClose;
-        const volSurge = typeof q.recentVol10m === 'number' && typeof q.avgVol10m === 'number'
-          && q.avgVol10m > 0 && q.recentVol10m >= q.avgVol10m * 2;
-        return breakDown && volSurge;
+        if (typeof q.price !== 'number' || typeof q.ma20 !== 'number') return false;
+        if (q.ma20 <= 0) return false;
+        return q.price < q.ma20 * 0.99;
       },
     },
     {
       id: "D5",
-      label: "체결 데이터 급락 (체결강도 < 80% + 대량 매도 3회 연속)",
-      desc: "실시간 체결강도 80% 미만 + 평균 체결량의 10배 초과 매도 3회 이상 연속",
-      check: (q) => typeof q.volumePower === 'number' && q.volumePower < 80
-        && typeof q.largeSellCount === 'number' && q.largeSellCount >= 3,
+      label: "RSI 과매도 진입 (RSI(14) < 40)",
+      desc: "RSI(14) 40 미만 — 단기 매도 과잉으로 추가 하락 가능성",
+      check: (q) => typeof q.rsi === 'number' && q.rsi < 40,
     },
   ];
 
