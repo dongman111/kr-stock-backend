@@ -663,15 +663,18 @@ async function fetchNews(ticker, stockName = '', sectorKeywords = []) {
             const hasEnglishName = stockName && /^[A-Z]/.test(stockName) && title.toUpperCase().includes(stockName.toUpperCase());
             // 관련성 필터 적용
             const rel = isRelevant(title);
-            if ((hasKorean || hasEnglishName) && title.length > 3 && rel) {
-              allNews.push({ title, url, fromGoogle: true, priority: rel === 'sector' ? 1 : 3 });
+            // sector 기사(priority=1)는 추가하지 않음 - 종목 직접 언급만 허용
+            if ((hasKorean || hasEnglishName) && title.length > 3 && rel && rel !== 'sector') {
+              allNews.push({ title, url, fromGoogle: true, priority: 3 });
             }
           }
         }
       } catch { /* ignore */ }
     }
 
-    return allNews.slice(0, 10).map(n => ({
+    // sector 기사(priority=1) 제거 후 5개만 반환
+    allNews = allNews.filter(n => (n.priority ?? 3) >= 3);
+    return allNews.slice(0, 5).map(n => ({
       title: n.title ?? '',
       url: n.url || `https://finance.naver.com/item/news.naver?code=${code}`,
       publishTime: 0,
@@ -748,19 +751,21 @@ function getArticleScore(title) {
 // ─── 뉴스 점수 계산 ───────────────────────────────────────────────────────────
 function calcNewsScore(newsItems) {
   const slots = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 5; i++) {
     if (i < newsItems.length) {
       const item = newsItems[i];
       const title = typeof item === "string" ? item : (item.title ?? "");
       const { score: pts, sentiment } = getArticleScore(title);
       const url = (typeof item === "object" && item.url) ? item.url : `https://finance.naver.com/`;
-      slots.push({ title, url, pts, bullish: sentiment === 'bullish', sentiment });
+      // 기사당 20점 (bullish=20, bearish=0, neutral=10)
+      const pts20 = sentiment === 'bullish' ? 20 : sentiment === 'bearish' ? 0 : 10;
+      slots.push({ title, url, pts: pts20, bullish: sentiment === 'bullish', sentiment });
     } else {
-      slots.push({ title: "관련 기사 없음", pts: 5, bullish: false, sentiment: 'neutral' });
+      slots.push({ title: "관련 기사 없음", pts: 10, bullish: false, sentiment: 'neutral' });
     }
   }
   const rawScore = slots.reduce((sum, s) => sum + s.pts, 0);
-  const score = Math.round(rawScore * 0.15); // 15% 반영 (max 15점)
+  const score = Math.round(rawScore * 0.10); // 10% 반영 (max 10점)
   return { score, rawScore, slots };
 }
 
@@ -962,7 +967,7 @@ function calcChartScore(q) {
     if (passed) rawScore += 10;
     return { id: item.id, label: item.label, desc: item.desc, pts: passed ? 10 : 0, passed };
   });
-  const score = Math.round(rawScore * 0.40); // 40% 반영
+  const score = Math.round(rawScore * 0.45); // 45% 반영
   return { score, rawScore, checklist };
 }
 
