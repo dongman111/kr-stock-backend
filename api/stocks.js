@@ -547,46 +547,43 @@ async function fetchNews(ticker) {
 
     let allNews = [];
 
-    // 네이버 금융 HTML 파싱 (뉴스 목록 테이블)
-    // 실제 구조: <td class="title"><a href="/item/news_read.naver?..." class="tit">제목</a></td>
+    // 네이버 금융 HTML 파싱
+    // 실제 구조: <a href="/item/news_read.naver?..." class="tit" onClick=...>제목</a>
+    // iconv-lite로 EUC-KR 디코딩 → UTF-8 변환 후 파싱
     if (naverResp.status === 'fulfilled' && naverResp.value.ok) {
       try {
         const buf = await naverResp.value.arrayBuffer();
-        // EUC-KR 디코딩 (네이버 금융은 EUC-KR 인코딩)
-        const decoder = new TextDecoder('euc-kr');
-        const html = decoder.decode(buf);
-        // 패턴 1: class="tit" 링크 (네이버 금융 뉴스 테이블 실제 구조)
-        const titRegex = /<a[^>]+href="(\/item\/news_read\.naver[^"]+)"[^>]*class="tit"[^>]*>([^<]{5,120})<\/a>/gi;
+        let html;
+        try {
+          // iconv-lite로 EUC-KR 디코딩 시도
+          const iconv = await import('iconv-lite');
+          html = iconv.decode(Buffer.from(buf), 'euc-kr');
+        } catch {
+          // fallback: latin1 (URL은 정상 추출, 한글은 깨진 상태)
+          html = Buffer.from(buf).toString('latin1');
+        }
+        // class="tit" 링크 패턴 (실제 네이버 금융 구조)
+        const titRegex = /class="tit"[^>]*>([^<]{5,120})<\/a>/gi;
         let m;
         while ((m = titRegex.exec(html)) !== null && allNews.length < 10) {
-          const url = `https://finance.naver.com${m[1]}`;
-          const title = m[2].trim()
-            .replace(/&ldquo;/g,'"').replace(/&rdquo;/g,'"')
-            .replace(/&lsquo;/g,"'").replace(/&rsquo;/g,"'")
-            .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
-            .replace(/&hellip;/g,'…').replace(/&#[0-9]+;/g,'').replace(/\s+/g,' ');
-          if (title && title.length > 5) allNews.push({ title, url });
+          const title = m[1].trim()
+            .replace(/&ldquo;/g, '"').replace(/&rdquo;/g, '"')
+            .replace(/&lsquo;/g, "'").replace(/&rsquo;/g, "'")
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/&hellip;/g, '…').replace(/&#[0-9]+;/g, '').replace(/\s+/g, ' ');
+          if (title && title.length > 3) allNews.push({ title, url: '' });
         }
-        // 패턴 2: class="tit" 순서 반대인 경우
-        if (allNews.length < 3) {
-          const titRegex2 = /<a[^>]+class="tit"[^>]+href="(\/item\/news_read\.naver[^"]+)"[^>]*>([^<]{5,120})<\/a>/gi;
-          while ((m = titRegex2.exec(html)) !== null && allNews.length < 10) {
-            const url = `https://finance.naver.com${m[1]}`;
-            const title = m[2].trim().replace(/&[a-z]+;/g,'').replace(/&#[0-9]+;/g,'').replace(/\s+/g,' ');
-            if (title && title.length > 5) allNews.push({ title, url });
-          }
+        // URL 추출 및 매핑
+        const urlRegex = /href="(\/item\/news_read\.naver\?[^"]+)"/gi;
+        const urls = [];
+        let um;
+        while ((um = urlRegex.exec(html)) !== null && urls.length < 10) {
+          urls.push(`https://finance.naver.com${um[1]}`);
         }
-        // 패턴 3: news_read 링크 전체
-        if (allNews.length < 3) {
-          const altRegex = /href="(\/item\/news_read\.naver[^"]+)"[^>]*>([^<]{8,120})<\/a>/gi;
-          while ((m = altRegex.exec(html)) !== null && allNews.length < 10) {
-            const url = `https://finance.naver.com${m[1]}`;
-            const title = m[2].trim().replace(/&[a-z]+;/g,'').replace(/&#[0-9]+;/g,'').replace(/\s+/g,' ');
-            if (title && title.length > 5 && !title.includes('더보기') && !title.includes('이전') && !title.includes('다음')) {
-              allNews.push({ title, url });
-            }
-          }
-        }
+        allNews = allNews.map((item, i) => ({
+          ...item,
+          url: urls[i] || `https://finance.naver.com/item/news.naver?code=${code}`
+        }));
       } catch (e) { /* ignore parse errors */ }
     }
 
