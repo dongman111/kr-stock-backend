@@ -386,7 +386,7 @@ async function fetchIntradayData(ticker) {
 async function fetchQuote(ticker) {
   try {
     const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=90d&includePrePost=true`;
-    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 9000);
+    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 5000);
     if (!resp.ok) return null;
     const data = await resp.json();
     const result = data?.chart?.result?.[0];
@@ -556,8 +556,8 @@ async function fetchNews(ticker, stockName = '') {
     };
 
     const [naverResp, daumResp] = await Promise.allSettled([
-      fetchWithTimeout(naverRssUrl, { headers: NAVER_HEADERS }, 8000),
-      fetchWithTimeout(daumUrl, { headers: DAUM_HEADERS }, 8000),
+      fetchWithTimeout(naverRssUrl, { headers: NAVER_HEADERS }, 3000),
+      fetchWithTimeout(daumUrl, { headers: DAUM_HEADERS }, 3000),
     ]);
 
     let allNews = [];
@@ -611,7 +611,7 @@ async function fetchNews(ticker, stockName = '') {
     if (allNews.length === 0) {
       try {
         const yfUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=10&quotesCount=0`;
-        const yfResp = await fetchWithTimeout(yfUrl, { headers: YF_HEADERS }, 8000);
+        const yfResp = await fetchWithTimeout(yfUrl, { headers: YF_HEADERS }, 3000);
         if (yfResp.ok) {
           const yfData = await yfResp.json();
           for (const n of (yfData?.news ?? []).slice(0, 10)) {
@@ -920,7 +920,7 @@ function calcChartScore(q) {
 async function fetchIndexReturn() {
   try {
     const url = `https://query2.finance.yahoo.com/v8/finance/chart/%5EKS200?interval=1d&range=90d`;
-    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 9000);
+    const resp = await fetchWithTimeout(url, { headers: YF_HEADERS }, 5000);
     if (!resp.ok) return null;
     const data = await resp.json();
     const result = data?.chart?.result?.[0];
@@ -945,7 +945,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    const BATCH = 8;
+    const BATCH = 25;
     const results = [];
 
     // 코스피200 3개월 수익률 (RS 비교용) — 한 번만 fetch
