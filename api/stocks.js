@@ -568,14 +568,14 @@ function isSimilarTitle(t1, t2) {
 
 function isRelevant(title) {
       if (!title) return false;
-      if (nameTokens.length === 0) return true; // 종목명 없으면 필터 없음
+      if (nameTokens.length === 0) return true;
       const t = title;
       // 종목코드 직접 포함
       if (t.includes(code)) return true;
-      // 종목명 토큰 중 하나라도 포함 (3글자 이상 토큰만 사용)
+      // 종목명 토큰 (영문 포함) 체크
       const meaningfulTokens = nameTokens.filter(tok => tok.length >= 3);
       if (meaningfulTokens.length > 0 && meaningfulTokens.some(token => t.includes(token))) return true;
-      // 2글자 토큰은 완전 일치만 허용 (단어 경계)
+      // 2글자 토큰은 단어 경계 체크
       const shortTokens = nameTokens.filter(tok => tok.length === 2);
       if (shortTokens.some(token => {
         const idx = t.indexOf(token);
@@ -584,8 +584,11 @@ function isRelevant(title) {
         const after = idx + token.length < t.length ? t[idx + token.length] : ' ';
         return !/[가-힣a-zA-Z0-9]/.test(before) || !/[가-힣a-zA-Z0-9]/.test(after);
       })) return true;
-      // 3순위: 업종/섹터 키워드 포함 (종목명 없을 때 보충)
-      if (sectorKeywords.length > 0 && sectorKeywords.some(kw => t.includes(kw))) return 'sector';
+      // 한글 이름 직접 포함 체크 (sector[0]이 한글이면 직접 관련으로 처리)
+      if (sectorKeywords.length > 0) {
+        const korName = sectorKeywords[0];
+        if (/[가-힣]/.test(korName) && t.includes(korName)) return true;
+      }
       return false;
     }
     // 네이버 금융 URL 기반 기사는 관련성 체크 없이 통과 (종목 코드가 URL에 포함됨)
@@ -674,7 +677,7 @@ function isRelevant(title) {
       else priority = 0;
       return { ...n, priority };
     }).filter(n => n.priority > 0 && n.title);
-    // 광고성 기사 제거
+    // 광고성 기사 제거 (sector 기사는 이미 isRelevant에서 제외됨)
     const filtered = scored.filter(n => !isPRArticle(n.title));
     // 중복 제거 (유사 제목 포함) 후 우선순위 정렬
     const seen2 = new Set();
@@ -706,17 +709,19 @@ function isRelevant(title) {
         }, 4000);
         if (gResp.ok) {
           const xml = await gResp.text();
-          const titleMatches = [...xml.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[([^\]]+)\]\]><\/title>[\s\S]*?<link>([^<]+)<\/link>/gi)];
+          // CDATA 방식과 일반 텍스트 방식 모두 처리
+          const titleMatches = [...xml.matchAll(/<item>[\s\S]*?<title>(?:<!\[CDATA\[([^\]]+)\]\]>|([^<]+))<\/title>[\s\S]*?<link>([^<]+)<\/link>/gi)];
           for (const tm of titleMatches.slice(0, 15)) {
-            const title = tm[1].replace(/<[^>]+>/g, '').trim().replace(/\s+/g, ' ');
-            const url = tm[2].trim();
+            const rawTitle = (tm[1] || tm[2] || '').trim();
+            const title = rawTitle.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            const url = (tm[3] || '').trim();
+            if (!title || title.length < 4) continue;
             // 한국어 또는 종목명(영문) 포함 기사 허용
             const hasKorean = /[가-힣]/.test(title);
             const hasEnglishName = stockName && /^[A-Z]/.test(stockName) && title.toUpperCase().includes(stockName.toUpperCase());
-            // 관련성 필터 적용
+            // 관련성 필터 적용 (isRelevant에서 한글 이름도 체크)
             const rel = isRelevant(title);
-            // sector 기사(priority=1)는 추가하지 않음 - 종목 직접 언급만 허용
-            if ((hasKorean || hasEnglishName) && title.length > 3 && rel && rel !== 'sector') {
+            if ((hasKorean || hasEnglishName) && rel === true) {
               allNews.push({ title, url, fromGoogle: true, priority: 3 });
             }
           }
@@ -724,8 +729,7 @@ function isRelevant(title) {
       } catch { /* ignore */ }
     }
 
-    // sector 기사(priority=1) 제거 후 5개만 반환
-    allNews = allNews.filter(n => (n.priority ?? 3) >= 3);
+    // 직접 관련 기사만 반환 (isRelevant=true인 것만 남아있음)
     return allNews.slice(0, 5).map(n => ({
       title: n.title ?? '',
       url: n.url || `https://finance.naver.com/item/news.naver?code=${code}`,
