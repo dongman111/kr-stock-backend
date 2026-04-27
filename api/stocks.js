@@ -865,7 +865,7 @@ function calcDownSignalScore(q) {
   return { deduction, deductionRaw, checklist };
 }
 
-// ─── 기관 매수 체크리스트 (10개 × 10점, 최대 100점 → 45% 반영 = 45점) ─────────
+// ─── 기관 매수 체크리스트 (10개 × 10점, 최대 100점 → 50% 반영 = 50점) ─────────
 const INST_CHECKLIST = [
   {
     id: "I1",
@@ -944,11 +944,11 @@ function calcInstitutionalScore(q) {
     if (passed) rawScore += 10;
     return { id: item.id, label: item.label, desc: item.desc, pts: passed ? 10 : 0, passed };
   });
-  const score = Math.round(rawScore * 0.45); // 45% 반영
+  const score = Math.round(rawScore * 0.5); // 50% 반영
   return { score, rawScore, checklist };
 }
 
-// ─── 차트 분석 체크리스트 (10개 × 10점, 최대 100점 → 40% 반영 = 40점) ───────
+// ─── 차트 분석 체크리스트 (10개 × 10점, 최대 100점 → 50% 반영 = 50점) ───────
 const CHART_CHECKLIST = [
   {
     id: "T1",
@@ -1063,7 +1063,7 @@ function calcChartScore(q) {
     if (passed) rawScore += 10;
     return { id: item.id, label: item.label, desc: item.desc, pts: passed ? 10 : 0, passed };
   });
-  const score = Math.round(rawScore * 0.45); // 45% 반영
+  const score = Math.round(rawScore * 0.5); // 50% 반영
   return { score, rawScore, checklist };
 }
 
